@@ -18,4 +18,4 @@ Then run `/reload` in Pi after edits.
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
+MIT
