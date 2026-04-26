@@ -623,8 +623,8 @@ body{
   transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s ease;
 }
 .tile:hover img{
-  transform:translateY(-3px);
-  box-shadow:0 14px 30px -10px rgba(26,23,20,0.20),0 1px 0 var(--hair);
+  transform:none;
+  box-shadow:0 6px 18px -12px rgba(26,23,20,0.22),0 1px 0 var(--hair);
 }
 .tile:focus-visible{outline:none}
 .tile:focus-visible img{box-shadow:0 0 0 1px var(--ink)}
@@ -661,7 +661,7 @@ body{
 }
 .promptBox::placeholder{color:var(--muted);font-style:italic}
 .controls{
-  display:flex;gap:24px;align-items:center;
+  display:flex;gap:18px;align-items:center;flex-wrap:wrap;
   border-top:1px solid var(--hair);padding-top:12px;
   font-family:var(--sans);font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:var(--muted);
 }
@@ -688,10 +688,10 @@ body{
 .steps button:hover{background:var(--paper-2)}
 .steps button.active{background:var(--ink);color:var(--paper)}
 .generate{
-  margin-left:auto;border:0;cursor:pointer;
+  margin-left:auto;border:0;cursor:pointer;align-self:stretch;min-height:36px;
   background:var(--ink);color:var(--paper);
   font-family:var(--sans);font-size:11px;font-weight:600;letter-spacing:0.22em;text-transform:uppercase;
-  padding:11px 22px;
+  padding:0 22px;
   transition:background .15s ease;
 }
 .generate:hover{background:#000}
@@ -699,9 +699,9 @@ body{
 
 /* ----- modal ----- */
 .modal{
-  position:fixed;inset:0;background:rgba(251,248,241,0.92);
-  backdrop-filter:blur(28px) saturate(1.08);
-  -webkit-backdrop-filter:blur(28px) saturate(1.08);
+  position:fixed;inset:0;background:rgba(251,248,241,0.58);
+  backdrop-filter:blur(7px) saturate(1.03);
+  -webkit-backdrop-filter:blur(7px) saturate(1.03);
   z-index:8;display:none;align-items:center;justify-content:center;
 }
 .modal.open{display:flex;animation:fadeIn .18s ease}
@@ -768,7 +768,7 @@ body{
   .composer{width:calc(100vw - 24px);bottom:16px;padding:14px 16px}
   .promptBox{font-size:18px}
   .controls{flex-wrap:wrap;gap:14px}
-  .generate{width:100%;margin-left:0;margin-top:8px}
+  .generate{width:100%;margin-left:0;margin-top:8px;min-height:40px}
   .nav{display:none}
   .modal-bar{flex-wrap:wrap;width:calc(100vw - 24px);justify-content:center}
 }
