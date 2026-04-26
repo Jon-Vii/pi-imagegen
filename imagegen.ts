@@ -866,7 +866,7 @@ function render(){
     $('#wall').innerHTML='<div class="empty"><div class="mark">'+(images.length?'∅':'∎')+'</div><h2>'+(images.length?'No plates here.':'A blank canvas.')+'</h2><p>'+(images.length?'Switch the filter to see other generations.':'Type a prompt below — your generations will appear here, full and uncropped.')+'</p></div>';
     return;
   }
-  $('#wall').innerHTML=visible.map((x,i)=>'<button type="button" class="tile" title="'+esc(x.prompt)+'" data-id="'+esc(x.imageId)+'" style="animation-delay:'+Math.min(i*24,420)+'ms"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></button>').join('');
+  $('#wall').innerHTML=visible.map((x,i)=>'<button type="button" class="tile" aria-label="Open image" data-id="'+esc(x.imageId)+'" style="animation-delay:'+Math.min(i*24,420)+'ms"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></button>').join('');
   $$('.tile').forEach(t=>{t.onclick=()=>select(t.dataset.id);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.dataset.id)}}});
 }
 
