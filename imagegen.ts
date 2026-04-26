@@ -10,10 +10,11 @@ import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
 import { Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
@@ -279,6 +280,21 @@ function batchDirName(prompt: string): string {
 	return `${stamp}-${slug}`;
 }
 
+async function findMetadataByImageId(imageId: string): Promise<ImagegenMetadata | undefined> {
+	const recent = await readRecentMetadata(1000);
+	return recent.find((item) => item.imageId === imageId);
+}
+
+function insertImageIntoPrompt(path: string, ctx: ExtensionContext | undefined): boolean {
+	if (!ctx?.hasUI) return false;
+	const ref = `@${path}`;
+	const current = ctx.ui.getEditorText();
+	const separator = current.length === 0 || /\s$/.test(current) ? "" : " ";
+	ctx.ui.setEditorText(`${current}${separator}${ref}`);
+	ctx.ui.notify(`Added image to prompt: ${path}`, "info");
+	return true;
+}
+
 function buildRequest(params: ToolParams, responseModel: string, sessionId: string) {
 	const size = params.size ?? "auto";
 	const quality = params.quality ?? "auto";
@@ -465,7 +481,141 @@ async function generateImage(params: ToolParams, signal: AbortSignal | undefined
 	return { image, text, details };
 }
 
+function writeHtml(res: ServerResponse, html: string) {
+	res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" });
+	res.end(html);
+}
+
+function writeJson(res: ServerResponse, statusCode: number, value: unknown) {
+	res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" });
+	res.end(JSON.stringify(value));
+}
+
+function writeText(res: ServerResponse, statusCode: number, text: string) {
+	res.writeHead(statusCode, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-cache, no-store, must-revalidate" });
+	res.end(text);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<any> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	if (chunks.length === 0) return {};
+	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function openBrowser(url: string): Promise<void> {
+	const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
+	const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, { detached: true, stdio: "ignore" });
+		child.once("error", reject);
+		child.once("spawn", () => {
+			child.unref();
+			resolve();
+		});
+	});
+}
+
+function renderStudioPage(token: string): string {
+	return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pi Image Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#0c0b09;--panel:#171512;--panel2:#211d18;--ink:#f4ead7;--muted:#a79b88;--line:#332d25;--accent:#ff9d45;--good:#55d38a}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,#2b1b10,#0c0b09 42%);color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;height:100vh;overflow:hidden}.app{display:grid;grid-template-columns:260px 1fr 420px;height:100vh}.side,.inspect{background:rgba(23,21,18,.92);border-color:var(--line);overflow:auto}.side{border-right:1px solid var(--line);padding:18px}.inspect{border-left:1px solid var(--line);padding:18px}.brand{font:700 22px ui-serif,Georgia,serif;margin-bottom:18px}.search{width:100%;border:1px solid var(--line);background:#0f0e0c;color:var(--ink);border-radius:12px;padding:11px 12px;outline:none}.pill{display:inline-block;margin:10px 8px 0 0;padding:6px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);cursor:pointer}.pill.active{color:#111;background:var(--accent);border-color:var(--accent)}main{overflow:auto;padding:18px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}.card{background:rgba(33,29,24,.88);border:1px solid var(--line);border-radius:16px;overflow:hidden;cursor:pointer;transition:.12s transform,.12s border-color}.card:hover{transform:translateY(-2px);border-color:#6b553e}.card.selected{outline:2px solid var(--accent)}.thumb{width:100%;aspect-ratio:1.25;object-fit:cover;background:#0b0a09;display:block}.meta{padding:10px}.file{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.prompt{color:var(--muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.date{color:#796f62;font-size:11px;margin-top:6px}.preview{width:100%;max-height:42vh;object-fit:contain;background:#090807;border:1px solid var(--line);border-radius:14px}.h{font-weight:800;margin:16px 0 8px}.kv{color:var(--muted);word-break:break-word}.btns{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.btn{border:1px solid var(--line);background:#242019;color:var(--ink);border-radius:10px;padding:8px 10px;cursor:pointer}.btn.primary{background:var(--accent);color:#17100a;border-color:var(--accent);font-weight:800}.empty{color:var(--muted);padding:40px;text-align:center}code{color:#ffd19b}.small{font-size:12px;color:var(--muted)}@media(max-width:1000px){.app{grid-template-columns:1fr}.side,.inspect{position:static;border:0}.inspect{display:none}}
+</style>
+</head>
+<body><div class="app"><aside class="side"><div class="brand">Pi Image Studio</div><input id="q" class="search" placeholder="Search prompts, paths…"/><div><span class="pill active" data-filter="all">All</span><span class="pill" data-filter="batch">Batches</span><span class="pill" data-filter="tmp">/tmp</span></div><p class="small">Local browser workspace backed by your Pi imagegen metadata.</p><p class="small">Actions call the extension on localhost.</p></aside><main><div class="top"><div><b id="count">0 images</b><div class="small">Newest first</div></div><button class="btn" id="refresh">Refresh</button></div><div id="grid" class="grid"></div></main><aside class="inspect" id="inspect"><div class="empty">Select an image</div></aside></div>
+<script>
+const TOKEN=${JSON.stringify(token)};let images=[];let selected=null;let filter='all';
+const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function imgUrl(x){return '/api/image/'+encodeURIComponent(x.imageId)+'?token='+encodeURIComponent(TOKEN)}
+async function api(path,opts={}){const sep=path.includes('?')?'&':'?';const r=await fetch(path+sep+'token='+encodeURIComponent(TOKEN),opts);if(!r.ok)throw new Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
+async function load(){const data=await api('/api/images');images=data.images||[];render()}
+function passes(x){const q=$('#q').value.toLowerCase();if(filter==='batch'&&!x.savedPath.includes('/batches/'))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;if(!q)return true;return [x.prompt,x.revisedPrompt,x.savedPath,x.imageId].join(' ').toLowerCase().includes(q)}
+function render(){const visible=images.filter(passes);$('#count').textContent=visible.length+' image'+(visible.length===1?'':'s');$('#grid').innerHTML=visible.map(x=>'<article class="card '+(selected?.imageId===x.imageId?'selected':'')+'" data-id="'+esc(x.imageId)+'"><img class="thumb" src="'+imgUrl(x)+'"><div class="meta"><div class="file">'+esc(x.savedPath.split('/').pop())+'</div><div class="prompt">'+esc(x.prompt)+'</div><div class="date">'+esc(new Date(x.createdAt).toLocaleString())+'</div></div></article>').join('')||'<div class="empty">No images found.</div>';document.querySelectorAll('.card').forEach(c=>c.onclick=()=>select(c.dataset.id))}
+function select(id){selected=images.find(x=>x.imageId===id);render();renderInspect()}
+function renderInspect(){const x=selected;if(!x){$('#inspect').innerHTML='<div class="empty">Select an image</div>';return}$('#inspect').innerHTML='<img class="preview" src="'+imgUrl(x)+'"><div class="btns"><button class="btn primary" data-act="open">Open</button><button class="btn" data-act="reveal">Reveal</button><button class="btn" data-act="attach">Attach to prompt</button><button class="btn" data-act="copypath">Copy path</button><button class="btn" data-act="copyprompt">Copy prompt</button></div><div class="h">Prompt</div><div class="kv">'+esc(x.prompt)+'</div>'+(x.revisedPrompt?'<div class="h">Revised prompt</div><div class="kv">'+esc(x.revisedPrompt)+'</div>':'')+'<div class="h">Path</div><div class="kv"><code>'+esc(x.savedPath)+'</code></div><div class="h">Metadata</div><div class="kv">'+esc([x.imageModel,x.size,x.quality,x.background,x.outputFormat].filter(Boolean).join(' · '))+'</div>';document.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>act(b.dataset.act))}
+async function act(a){if(!selected)return;if(a==='copypath')return navigator.clipboard.writeText(selected.savedPath);if(a==='copyprompt')return navigator.clipboard.writeText(selected.prompt);await api('/api/'+(a==='attach'?'insert':a),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})})}
+$('#refresh').onclick=load;$('#q').oninput=render;document.querySelectorAll('.pill').forEach(p=>p.onclick=()=>{document.querySelectorAll('.pill').forEach(x=>x.classList.remove('active'));p.classList.add('active');filter=p.dataset.filter;render()});load().catch(e=>{$('#grid').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
+</script></body></html>`;
+}
+
 export default function imagegen(pi: ExtensionAPI) {
+	let studioServer: Server | undefined;
+	let studioBaseUrl: string | undefined;
+	let studioToken = randomUUID();
+	let lastCtx: ExtensionContext | undefined;
+
+	async function handleStudioRequest(req: IncomingMessage, res: ServerResponse) {
+		const url = new URL(req.url ?? "/", "http://127.0.0.1");
+		if (url.pathname !== "/favicon.ico" && url.searchParams.get("token") !== studioToken) {
+			writeText(res, 403, "Forbidden");
+			return;
+		}
+		if (url.pathname === "/favicon.ico") return writeText(res, 204, "");
+		if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/studio")) return writeHtml(res, renderStudioPage(studioToken));
+		if (req.method === "GET" && url.pathname === "/api/images") return writeJson(res, 200, { images: await readRecentMetadata(1000) });
+		const imageMatch = url.pathname.match(/^\/api\/image\/([^/]+)$/);
+		if (req.method === "GET" && imageMatch) {
+			const metadata = await findMetadataByImageId(decodeURIComponent(imageMatch[1]!));
+			if (!metadata) return writeText(res, 404, "Image not found");
+			try {
+				await stat(metadata.savedPath);
+				res.writeHead(200, { "Content-Type": metadata.mimeType || mimeFromFormat(metadata.outputFormat), "Cache-Control": "no-cache" });
+				res.end(await readFile(metadata.savedPath));
+			} catch {
+				writeText(res, 404, "Image file not found");
+			}
+			return;
+		}
+		if (req.method === "POST" && ["/api/open", "/api/reveal", "/api/insert"].includes(url.pathname)) {
+			const body = await readJsonBody(req);
+			const metadata = await findMetadataByImageId(String(body.imageId ?? ""));
+			if (!metadata) return writeJson(res, 404, { ok: false, error: "Image not found" });
+			if (url.pathname === "/api/open") macOpen(metadata.savedPath);
+			if (url.pathname === "/api/reveal") macOpen(metadata.savedPath, true);
+			if (url.pathname === "/api/insert") insertImageIntoPrompt(metadata.savedPath, lastCtx);
+			return writeJson(res, 200, { ok: true });
+		}
+		writeText(res, 404, "Not found");
+	}
+
+	async function ensureStudioServer(): Promise<string> {
+		if (studioServer && studioBaseUrl) return studioBaseUrl;
+		studioToken = randomUUID();
+		studioServer = createServer((req, res) => void handleStudioRequest(req, res).catch((error) => writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) })));
+		await new Promise<void>((resolve, reject) => {
+			studioServer!.once("error", reject);
+			studioServer!.listen(0, "127.0.0.1", () => resolve());
+		});
+		const address = studioServer.address();
+		if (!address || typeof address === "string") throw new Error("Could not determine studio server port.");
+		studioBaseUrl = `http://127.0.0.1:${address.port}`;
+		return studioBaseUrl;
+	}
+
+	async function openStudio(ctx: ExtensionContext) {
+		lastCtx = ctx;
+		const base = await ensureStudioServer();
+		const url = `${base}/studio?token=${encodeURIComponent(studioToken)}`;
+		await openBrowser(url);
+		ctx.ui.notify("Image studio opened.", "info");
+	}
+
+	pi.on("session_start", (_event, ctx) => {
+		lastCtx = ctx;
+	});
+
+	pi.on("session_shutdown", async () => {
+		if (studioServer) await new Promise<void>((resolve) => studioServer!.close(() => resolve()));
+		studioServer = undefined;
+		studioBaseUrl = undefined;
+		lastCtx = undefined;
+	});
+
 	pi.registerMessageRenderer("imagegen-result", (message, _options, theme) => {
 		const details = message.details as ImagegenMetadata | undefined;
 		const lines = [
@@ -533,6 +683,7 @@ export default function imagegen(pi: ExtensionAPI) {
 						"/img gen [--style name] [--size 1536x1024] [--quality medium] <prompt>",
 						"/img batch <count> [--style name] <prompt>",
 						"/img styles",
+						"/img studio",
 						"/img list [count]",
 						"/img open [latest|number|path]",
 						"/img reveal [latest|number|path]",
@@ -541,6 +692,11 @@ export default function imagegen(pi: ExtensionAPI) {
 					].join("\n"),
 					display: true,
 				});
+				return;
+			}
+
+			if (["studio", "gallery", "browse"].includes(subcommand)) {
+				await openStudio(ctx);
 				return;
 			}
 
