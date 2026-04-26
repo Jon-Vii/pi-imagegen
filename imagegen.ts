@@ -622,8 +622,15 @@ body{
   box-shadow:0 1px 0 var(--hair);
   transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s ease;
 }
+.tile::after{
+  content:"";position:absolute;inset:0;pointer-events:none;
+  border:1px solid transparent;
+  transition:border-color .14s ease,background .14s ease;
+}
+.tile:hover::after{border-color:rgba(26,23,20,0.34);background:rgba(251,248,241,0.10)}
 .tile:hover img{
   transform:none;
+  filter:contrast(1.015) brightness(.985);
   box-shadow:0 6px 18px -12px rgba(26,23,20,0.22),0 1px 0 var(--hair);
 }
 .tile:focus-visible{outline:none}
