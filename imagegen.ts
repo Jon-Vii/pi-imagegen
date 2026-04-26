@@ -85,6 +85,10 @@ interface ImagegenMetadata {
 	quality: string;
 	background: string;
 	outputFormat: string;
+	batchId?: string;
+	batchPrompt?: string;
+	batchIndex?: number;
+	batchCount?: number;
 }
 
 interface ImagegenDetails {
@@ -404,7 +408,13 @@ type ImagegenContext = {
 
 type ToolUpdate = (result: { content: Array<{ type: "text"; text: string }>; details?: unknown }) => void;
 
-async function generateImage(params: ToolParams, signal: AbortSignal | undefined, onUpdate: ToolUpdate | undefined, ctx: ImagegenContext) {
+async function generateImage(
+	params: ToolParams,
+	signal: AbortSignal | undefined,
+	onUpdate: ToolUpdate | undefined,
+	ctx: ImagegenContext,
+	extraMetadata: Partial<Pick<ImagegenMetadata, "batchId" | "batchPrompt" | "batchIndex" | "batchCount">> = {},
+) {
 	const token = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
 	if (!token) {
 		throw new Error("Missing OpenAI Codex OAuth credentials. Run /login and select OpenAI ChatGPT Plus/Pro (Codex).");
@@ -465,6 +475,7 @@ async function generateImage(params: ToolParams, signal: AbortSignal | undefined
 		quality: params.quality ?? "auto",
 		background: params.background ?? "auto",
 		outputFormat,
+		...extraMetadata,
 	};
 	await saveMetadata(metadata);
 
@@ -527,19 +538,22 @@ function renderStudioPage(token: string): string {
 :root{color-scheme:dark;--bg:#0c0b09;--panel:#171512;--panel2:#211d18;--ink:#f4ead7;--muted:#a79b88;--line:#332d25;--accent:#ff9d45;--good:#55d38a}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,#2b1b10,#0c0b09 42%);color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;height:100vh;overflow:hidden}.app{display:grid;grid-template-columns:260px 1fr 420px;height:100vh}.side,.inspect{background:rgba(23,21,18,.92);border-color:var(--line);overflow:auto}.side{border-right:1px solid var(--line);padding:18px}.inspect{border-left:1px solid var(--line);padding:18px}.brand{font:700 22px ui-serif,Georgia,serif;margin-bottom:18px}.search{width:100%;border:1px solid var(--line);background:#0f0e0c;color:var(--ink);border-radius:12px;padding:11px 12px;outline:none}.pill{display:inline-block;margin:10px 8px 0 0;padding:6px 10px;border:1px solid var(--line);border-radius:999px;color:var(--muted);cursor:pointer}.pill.active{color:#111;background:var(--accent);border-color:var(--accent)}main{overflow:auto;padding:18px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}.card{background:rgba(33,29,24,.88);border:1px solid var(--line);border-radius:16px;overflow:hidden;cursor:pointer;transition:.12s transform,.12s border-color}.card:hover{transform:translateY(-2px);border-color:#6b553e}.card.selected{outline:2px solid var(--accent)}.thumb{width:100%;aspect-ratio:1.25;object-fit:cover;background:#0b0a09;display:block}.meta{padding:10px}.file{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.prompt{color:var(--muted);font-size:12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.date{color:#796f62;font-size:11px;margin-top:6px}.preview{width:100%;max-height:42vh;object-fit:contain;background:#090807;border:1px solid var(--line);border-radius:14px}.h{font-weight:800;margin:16px 0 8px}.kv{color:var(--muted);word-break:break-word}.btns{display:flex;flex-wrap:wrap;gap:8px;margin:14px 0}.btn{border:1px solid var(--line);background:#242019;color:var(--ink);border-radius:10px;padding:8px 10px;cursor:pointer}.btn.primary{background:var(--accent);color:#17100a;border-color:var(--accent);font-weight:800}.empty{color:var(--muted);padding:40px;text-align:center}code{color:#ffd19b}.small{font-size:12px;color:var(--muted)}@media(max-width:1000px){.app{grid-template-columns:1fr}.side,.inspect{position:static;border:0}.inspect{display:none}}
 </style>
 </head>
-<body><div class="app"><aside class="side"><div class="brand">Pi Image Studio</div><input id="q" class="search" placeholder="Search prompts, paths…"/><div><span class="pill active" data-filter="all">All</span><span class="pill" data-filter="batch">Batches</span><span class="pill" data-filter="tmp">/tmp</span></div><p class="small">Local browser workspace backed by your Pi imagegen metadata.</p><p class="small">Actions call the extension on localhost.</p></aside><main><div class="top"><div><b id="count">0 images</b><div class="small">Newest first</div></div><button class="btn" id="refresh">Refresh</button></div><div id="grid" class="grid"></div></main><aside class="inspect" id="inspect"><div class="empty">Select an image</div></aside></div>
+<body><div class="app"><aside class="side"><div class="brand">Pi Image Studio</div><input id="q" class="search" placeholder="Search prompts, paths…"/><div><span class="pill active" data-filter="all">All</span><span class="pill" data-filter="batch">Batches</span><span class="pill" data-filter="tmp">/tmp</span></div><div class="h">Batch groups</div><div id="batches" class="small"></div><p class="small">Local browser workspace backed by your Pi imagegen metadata.</p><p class="small">Actions call the extension on localhost. New images appear automatically.</p></aside><main><div class="top"><div><b id="count">0 images</b><div class="small" id="status">Newest first</div></div><button class="btn" id="refresh">Refresh</button></div><div id="grid" class="grid"></div></main><aside class="inspect" id="inspect"><div class="empty">Select an image</div></aside></div>
 <script>
-const TOKEN=${JSON.stringify(token)};let images=[];let selected=null;let filter='all';
+const TOKEN=${JSON.stringify(token)};let images=[];let selected=null;let filter='all';let batchFilter=null;
 const $=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function imgUrl(x){return '/api/image/'+encodeURIComponent(x.imageId)+'?token='+encodeURIComponent(TOKEN)}
 async function api(path,opts={}){const sep=path.includes('?')?'&':'?';const r=await fetch(path+sep+'token='+encodeURIComponent(TOKEN),opts);if(!r.ok)throw new Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
 async function load(){const data=await api('/api/images');images=data.images||[];render()}
-function passes(x){const q=$('#q').value.toLowerCase();if(filter==='batch'&&!x.savedPath.includes('/batches/'))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;if(!q)return true;return [x.prompt,x.revisedPrompt,x.savedPath,x.imageId].join(' ').toLowerCase().includes(q)}
-function render(){const visible=images.filter(passes);$('#count').textContent=visible.length+' image'+(visible.length===1?'':'s');$('#grid').innerHTML=visible.map(x=>'<article class="card '+(selected?.imageId===x.imageId?'selected':'')+'" data-id="'+esc(x.imageId)+'"><img class="thumb" src="'+imgUrl(x)+'"><div class="meta"><div class="file">'+esc(x.savedPath.split('/').pop())+'</div><div class="prompt">'+esc(x.prompt)+'</div><div class="date">'+esc(new Date(x.createdAt).toLocaleString())+'</div></div></article>').join('')||'<div class="empty">No images found.</div>';document.querySelectorAll('.card').forEach(c=>c.onclick=()=>select(c.dataset.id))}
+function batchKey(x){return x.batchId || (x.savedPath.includes('/batches/') ? x.savedPath.split('/batches/')[1]?.split('/')[0] : '') || ''}
+function passes(x){const q=$('#q').value.toLowerCase();const bk=batchKey(x);if(batchFilter&&bk!==batchFilter)return false;if(filter==='batch'&&!bk)return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;if(!q)return true;return [x.prompt,x.revisedPrompt,x.savedPath,x.imageId,x.batchPrompt,bk].join(' ').toLowerCase().includes(q)}
+function render(){const visible=images.filter(passes);$('#count').textContent=visible.length+' image'+(visible.length===1?'':'s');const groups=[...new Map(images.map(x=>[batchKey(x),x]).filter(([k])=>k)).entries()];$('#batches').innerHTML=groups.map(([k,x])=>'<div class="pill '+(batchFilter===k?'active':'')+'" data-batch="'+esc(k)+'">'+esc((x.batchPrompt||k).slice(0,38))+'</div>').join('')||'No batches yet.';document.querySelectorAll('[data-batch]').forEach(p=>p.onclick=()=>{batchFilter=batchFilter===p.dataset.batch?null:p.dataset.batch;filter=batchFilter?'batch':'all';document.querySelectorAll('.pill[data-filter]').forEach(x=>x.classList.toggle('active',x.dataset.filter===filter));render()});$('#grid').innerHTML=visible.map(x=>'<article class="card '+(selected?.imageId===x.imageId?'selected':'')+'" data-id="'+esc(x.imageId)+'"><img class="thumb" src="'+imgUrl(x)+'"><div class="meta"><div class="file">'+esc(x.savedPath.split('/').pop())+'</div><div class="prompt">'+esc(x.prompt)+'</div><div class="date">'+esc(new Date(x.createdAt).toLocaleString())+(batchKey(x)?' · batch '+esc(x.batchIndex||'')+'/'+esc(x.batchCount||''):'')+'</div></div></article>').join('')||'<div class="empty">No images found.</div>';document.querySelectorAll('.card').forEach(c=>c.onclick=()=>select(c.dataset.id))}
 function select(id){selected=images.find(x=>x.imageId===id);render();renderInspect()}
 function renderInspect(){const x=selected;if(!x){$('#inspect').innerHTML='<div class="empty">Select an image</div>';return}$('#inspect').innerHTML='<img class="preview" src="'+imgUrl(x)+'"><div class="btns"><button class="btn primary" data-act="open">Open</button><button class="btn" data-act="reveal">Reveal</button><button class="btn" data-act="attach">Attach to prompt</button><button class="btn" data-act="copypath">Copy path</button><button class="btn" data-act="copyprompt">Copy prompt</button></div><div class="h">Prompt</div><div class="kv">'+esc(x.prompt)+'</div>'+(x.revisedPrompt?'<div class="h">Revised prompt</div><div class="kv">'+esc(x.revisedPrompt)+'</div>':'')+'<div class="h">Path</div><div class="kv"><code>'+esc(x.savedPath)+'</code></div><div class="h">Metadata</div><div class="kv">'+esc([x.imageModel,x.size,x.quality,x.background,x.outputFormat].filter(Boolean).join(' · '))+'</div>';document.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>act(b.dataset.act))}
 async function act(a){if(!selected)return;if(a==='copypath')return navigator.clipboard.writeText(selected.savedPath);if(a==='copyprompt')return navigator.clipboard.writeText(selected.prompt);await api('/api/'+(a==='attach'?'insert':a),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})})}
-$('#refresh').onclick=load;$('#q').oninput=render;document.querySelectorAll('.pill').forEach(p=>p.onclick=()=>{document.querySelectorAll('.pill').forEach(x=>x.classList.remove('active'));p.classList.add('active');filter=p.dataset.filter;render()});load().catch(e=>{$('#grid').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
+$('#refresh').onclick=load;$('#q').oninput=render;document.querySelectorAll('.pill[data-filter]').forEach(p=>p.onclick=()=>{document.querySelectorAll('.pill[data-filter]').forEach(x=>x.classList.remove('active'));p.classList.add('active');filter=p.dataset.filter;batchFilter=null;render()});
+const events=new EventSource('/events?token='+encodeURIComponent(TOKEN));events.addEventListener('imagegen:generated',()=>{ $('#status').textContent='Updated '+new Date().toLocaleTimeString(); load() });events.addEventListener('ready',()=>{$('#status').textContent='Live · newest first'});events.onerror=()=>{$('#status').textContent='Disconnected · use Refresh'};
+load().catch(e=>{$('#grid').innerHTML='<div class="empty">'+esc(e.message)+'</div>'});
 </script></body></html>`;
 }
 
@@ -548,6 +562,33 @@ export default function imagegen(pi: ExtensionAPI) {
 	let studioBaseUrl: string | undefined;
 	let studioToken = randomUUID();
 	let lastCtx: ExtensionContext | undefined;
+	const studioEventClients = new Set<ServerResponse>();
+
+	function broadcastStudioEvent(event: string, data: unknown) {
+		const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+		for (const client of studioEventClients) {
+			if (!client.destroyed) client.write(payload);
+		}
+	}
+
+	function handleStudioEvents(req: IncomingMessage, res: ServerResponse) {
+		res.writeHead(200, {
+			"Content-Type": "text/event-stream; charset=utf-8",
+			"Cache-Control": "no-cache, no-store, must-revalidate",
+			Connection: "keep-alive",
+		});
+		res.write("event: ready\ndata: {}\n\n");
+		studioEventClients.add(res);
+		if (lastCtx?.hasUI) lastCtx.ui.setStatus("img", "img: studio open");
+		const ping = setInterval(() => {
+			if (!res.destroyed) res.write(": ping\n\n");
+		}, 15_000);
+		req.on("close", () => {
+			clearInterval(ping);
+			studioEventClients.delete(res);
+			if (studioEventClients.size === 0 && lastCtx?.hasUI) lastCtx.ui.setStatus("img", undefined);
+		});
+	}
 
 	async function handleStudioRequest(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -557,6 +598,7 @@ export default function imagegen(pi: ExtensionAPI) {
 		}
 		if (url.pathname === "/favicon.ico") return writeText(res, 204, "");
 		if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/studio")) return writeHtml(res, renderStudioPage(studioToken));
+		if (req.method === "GET" && url.pathname === "/events") return handleStudioEvents(req, res);
 		if (req.method === "GET" && url.pathname === "/api/images") return writeJson(res, 200, { images: await readRecentMetadata(1000) });
 		const imageMatch = url.pathname.match(/^\/api\/image\/([^/]+)$/);
 		if (req.method === "GET" && imageMatch) {
@@ -610,6 +652,8 @@ export default function imagegen(pi: ExtensionAPI) {
 	});
 
 	pi.on("session_shutdown", async () => {
+		for (const client of studioEventClients) client.end();
+		studioEventClients.clear();
 		if (studioServer) await new Promise<void>((resolve) => studioServer!.close(() => resolve()));
 		studioServer = undefined;
 		studioBaseUrl = undefined;
@@ -641,6 +685,7 @@ export default function imagegen(pi: ExtensionAPI) {
 		async execute(_toolCallId, params: ToolParams, signal, onUpdate, ctx) {
 			const { image, text, details } = await generateImage(params, signal, onUpdate as ToolUpdate | undefined, ctx);
 			pi.events.emit("imagegen:generated", details);
+			broadcastStudioEvent("imagegen:generated", details);
 
 			return {
 				content: [
@@ -722,6 +767,7 @@ export default function imagegen(pi: ExtensionAPI) {
 				ctx.ui.notify("Generating image...", "info");
 				const { details } = await generateImage(applyStyle(prompt, parsed.options), ctx.signal, undefined, ctx);
 				pi.events.emit("imagegen:generated", details);
+				broadcastStudioEvent("imagegen:generated", details);
 				ctx.ui.notify(`Generated image: ${details.savedPath}`, "success");
 				pi.sendMessage({
 					customType: "imagegen-result",
@@ -745,7 +791,8 @@ export default function imagegen(pi: ExtensionAPI) {
 					ctx.ui.notify(`Unknown style '${parsed.options.style}'. Try /img styles.`, "warning");
 					return;
 				}
-				const batchDir = join(getAgentDir(), "generated-images", "batches", batchDirName(prompt));
+				const batchId = batchDirName(prompt);
+				const batchDir = join(getAgentDir(), "generated-images", "batches", batchId);
 				const results: ImagegenDetails[] = [];
 				for (let index = 0; index < count; index++) {
 					ctx.ui.notify(`Generating image ${index + 1}/${count}...`, "info");
@@ -753,8 +800,14 @@ export default function imagegen(pi: ExtensionAPI) {
 						...parsed.options,
 						outputPath: join(batchDir, `${String(index + 1).padStart(2, "0")}.png`),
 					});
-					const { details } = await generateImage(params, ctx.signal, undefined, ctx);
+					const { details } = await generateImage(params, ctx.signal, undefined, ctx, {
+						batchId,
+						batchPrompt: prompt,
+						batchIndex: index + 1,
+						batchCount: count,
+					});
 					pi.events.emit("imagegen:generated", details);
+					broadcastStudioEvent("imagegen:generated", details);
 					results.push(details);
 				}
 				const batchPath = join(batchDir, "batch.json");
