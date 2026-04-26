@@ -1,0 +1,683 @@
+/**
+ * OpenAI Codex Image Generation for pi
+ *
+ * Registers `imagegen`, a custom tool that uses pi's existing openai-codex
+ * OAuth credentials to call the Codex Responses backend with the native
+ * `image_generation` tool (`gpt-image-2`).
+ */
+
+import { Buffer } from "node:buffer";
+import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, resolve } from "node:path";
+import { StringEnum } from "@mariozechner/pi-ai";
+import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@mariozechner/pi-coding-agent";
+import { Text } from "@mariozechner/pi-tui";
+import { type Static, Type } from "typebox";
+
+const PROVIDER = "openai-codex";
+const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+const DEFAULT_RESPONSE_MODEL = "gpt-5.5";
+const IMAGE_MODEL = "gpt-image-2";
+
+const SIZES = ["auto", "1024x1024", "1536x1024", "1024x1536"] as const;
+const QUALITIES = ["auto", "low", "medium", "high"] as const;
+const BACKGROUNDS = ["auto", "opaque", "transparent"] as const;
+const OUTPUT_FORMATS = ["png", "webp", "jpeg"] as const;
+
+const STYLE_PRESETS: Record<string, Partial<ToolParams> & { suffix: string }> = {
+	"minecraft-screenshot": {
+		size: "1536x1024",
+		quality: "medium",
+		background: "opaque",
+		suffix:
+			"Minecraft Java Edition in-game screenshot, blocky voxel style, modded gameplay scene, coherent block lighting, no photorealism, no UI overlays unless explicitly requested.",
+	},
+	minecraft: {
+		size: "1536x1024",
+		quality: "medium",
+		background: "opaque",
+		suffix: "Minecraft in-game screenshot, blocky voxel style, Java Edition modded scene, no photorealism.",
+	},
+	poster: {
+		size: "1024x1536",
+		quality: "high",
+		suffix: "Editorial poster composition, striking layout, cinematic lighting, polished art direction.",
+	},
+	wallpaper: {
+		size: "1536x1024",
+		quality: "high",
+		suffix: "Desktop wallpaper composition, wide cinematic framing, visually rich but uncluttered.",
+	},
+};
+
+const TOOL_PARAMS = Type.Object({
+	prompt: Type.String({ description: "Image description/prompt." }),
+	size: Type.Optional(StringEnum(SIZES)),
+	quality: Type.Optional(StringEnum(QUALITIES)),
+	background: Type.Optional(StringEnum(BACKGROUNDS)),
+	outputFormat: Type.Optional(StringEnum(OUTPUT_FORMATS)),
+	outputPath: Type.Optional(
+		Type.String({
+			description:
+				"Optional exact path where the generated image should be saved. Defaults to ~/.pi/agent/generated-images/<id>.<format>.",
+		}),
+	),
+});
+
+type ToolParams = Static<typeof TOOL_PARAMS>;
+
+interface ImagegenMetadata {
+	createdAt: string;
+	prompt: string;
+	provider: string;
+	responseModel: string;
+	imageModel: string;
+	imageId: string;
+	savedPath: string;
+	metadataPath: string;
+	mimeType: string;
+	revisedPrompt?: string;
+	size: string;
+	quality: string;
+	background: string;
+	outputFormat: string;
+}
+
+interface ImagegenDetails {
+	provider: string;
+	responseModel: string;
+	imageModel: string;
+	imageId: string;
+	savedPath: string;
+	metadataPath: string;
+	mimeType: string;
+	revisedPrompt?: string;
+	size: string;
+	quality: string;
+	background: string;
+	outputFormat: string;
+}
+
+interface CodexAccountClaims {
+	"https://api.openai.com/auth"?: {
+		chatgpt_account_id?: string;
+	};
+}
+
+function decodeJwtPayload(token: string): CodexAccountClaims {
+	const parts = token.split(".");
+	if (parts.length < 2) {
+		throw new Error("OpenAI Codex OAuth access token is not a JWT.");
+	}
+	return JSON.parse(Buffer.from(parts[1]!, "base64url").toString("utf8")) as CodexAccountClaims;
+}
+
+function getAccountId(token: string): string {
+	const accountId = decodeJwtPayload(token)["https://api.openai.com/auth"]?.chatgpt_account_id;
+	if (!accountId) {
+		throw new Error("Could not find chatgpt_account_id in OpenAI Codex OAuth token.");
+	}
+	return accountId;
+}
+
+function mimeFromFormat(format: string): string {
+	if (format === "jpeg") return "image/jpeg";
+	if (format === "webp") return "image/webp";
+	return "image/png";
+}
+
+function extensionFromFormat(format: string): string {
+	return format === "jpeg" ? "jpg" : format;
+}
+
+function defaultOutputPath(imageId: string, format: string): string {
+	const ext = extensionFromFormat(format);
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	return join(getAgentDir(), "generated-images", `${stamp}-${imageId}.${ext}`);
+}
+
+function resolveOutputPath(path: string | undefined, cwd: string, imageId: string, format: string): string {
+	if (!path || !path.trim()) return defaultOutputPath(imageId, format);
+	const raw = path.trim().startsWith("@") ? path.trim().slice(1) : path.trim();
+	const absolute = resolve(cwd, raw);
+	if (!extname(absolute)) {
+		return join(absolute, `${imageId}.${extensionFromFormat(format)}`);
+	}
+	return absolute;
+}
+
+async function saveImage(path: string, base64: string): Promise<void> {
+	await withFileMutationQueue(path, async () => {
+		await mkdir(dirname(path), { recursive: true });
+		await writeFile(path, Buffer.from(base64, "base64"));
+	});
+}
+
+function metadataPathForImage(path: string): string {
+	const ext = extname(path);
+	return ext ? `${path.slice(0, -ext.length)}.json` : `${path}.json`;
+}
+
+async function saveMetadata(metadata: ImagegenMetadata): Promise<void> {
+	await withFileMutationQueue(metadata.metadataPath, async () => {
+		await mkdir(dirname(metadata.metadataPath), { recursive: true });
+		await writeFile(metadata.metadataPath, JSON.stringify(metadata, null, 2), "utf8");
+	});
+
+	// Global index: keeps /img list working even when outputPath points outside
+	// ~/.pi/agent/generated-images, e.g. /tmp/foo.png or a project asset dir.
+	const indexPath = join(getAgentDir(), "generated-images", "index", `${metadata.imageId}.json`);
+	await withFileMutationQueue(indexPath, async () => {
+		await mkdir(dirname(indexPath), { recursive: true });
+		await writeFile(indexPath, JSON.stringify(metadata, null, 2), "utf8");
+	});
+}
+
+async function findJsonFilesRecursive(dir: string): Promise<string[]> {
+	if (!existsSync(dir)) return [];
+	const entries = await readdir(dir, { withFileTypes: true });
+	const files: string[] = [];
+	for (const entry of entries) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...(await findJsonFilesRecursive(path)));
+		} else if (entry.isFile() && entry.name.endsWith(".json")) {
+			files.push(path);
+		}
+	}
+	return files;
+}
+
+async function readRecentMetadata(limit = 10): Promise<ImagegenMetadata[]> {
+	const dir = join(getAgentDir(), "generated-images");
+	const files = await findJsonFilesRecursive(dir);
+	const byImageId = new Map<string, ImagegenMetadata>();
+	for (const file of files) {
+		try {
+			const parsed = JSON.parse(await readFile(file, "utf8")) as Partial<ImagegenMetadata>;
+			if (!parsed.imageId || !parsed.savedPath || !parsed.createdAt || !parsed.prompt) continue;
+			byImageId.set(parsed.imageId, parsed as ImagegenMetadata);
+		} catch {
+			// Ignore stale/bad sidecars and batch.json files.
+		}
+	}
+	return [...byImageId.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);
+}
+
+async function resolveImageTarget(target: string, cwd: string): Promise<string | undefined> {
+	const trimmed = target.trim() || "latest";
+	if (trimmed === "latest" || /^\d+$/.test(trimmed)) {
+		const index = trimmed === "latest" ? 0 : Number.parseInt(trimmed, 10) - 1;
+		const recent = await readRecentMetadata(Math.max(index + 1, 1));
+		return recent[index]?.savedPath;
+	}
+	const raw = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+	return resolve(cwd, raw);
+}
+
+function macOpen(path: string, reveal = false): void {
+	const args = reveal ? ["-R", path] : [path];
+	const child = spawn("open", args, { detached: true, stdio: "ignore" });
+	child.unref();
+}
+
+function parseImgArgs(input: string): { options: Partial<ToolParams> & { style?: string }; positional: string[] } {
+	const tokens = input.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((token) => token.replace(/^"|"$/g, "")) ?? [];
+	const options: Partial<ToolParams> & { style?: string } = {};
+	const positional: string[] = [];
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]!;
+		const next = tokens[index + 1];
+		if (token === "--style" && next) {
+			options.style = next;
+			index++;
+		} else if (token === "--size" && next) {
+			options.size = next as ToolParams["size"];
+			index++;
+		} else if (token === "--quality" && next) {
+			options.quality = next as ToolParams["quality"];
+			index++;
+		} else if (token === "--background" && next) {
+			options.background = next as ToolParams["background"];
+			index++;
+		} else if ((token === "--format" || token === "--output-format") && next) {
+			options.outputFormat = next as ToolParams["outputFormat"];
+			index++;
+		} else if ((token === "--out" || token === "--output") && next) {
+			options.outputPath = next;
+			index++;
+		} else {
+			positional.push(token);
+		}
+	}
+	return { options, positional };
+}
+
+function applyStyle(prompt: string, options: Partial<ToolParams> & { style?: string }): ToolParams {
+	const preset = options.style ? STYLE_PRESETS[options.style] : undefined;
+	const styledPrompt = preset?.suffix ? `${prompt}. ${preset.suffix}` : prompt;
+	return {
+		prompt: styledPrompt,
+		size: options.size ?? preset?.size,
+		quality: options.quality ?? preset?.quality,
+		background: options.background ?? preset?.background,
+		outputFormat: options.outputFormat ?? preset?.outputFormat,
+		outputPath: options.outputPath,
+	};
+}
+
+function batchDirName(prompt: string): string {
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	const slug = prompt
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48) || "batch";
+	return `${stamp}-${slug}`;
+}
+
+function buildRequest(params: ToolParams, responseModel: string, sessionId: string) {
+	const size = params.size ?? "auto";
+	const quality = params.quality ?? "auto";
+	const background = params.background ?? "auto";
+	const outputFormat = params.outputFormat ?? "png";
+
+	return {
+		model: responseModel,
+		store: false,
+		stream: true,
+		instructions:
+			"You are an image generation dispatcher. Use the image_generation tool to create exactly the image requested by the user. Do not write code.",
+		input: [
+			{
+				role: "user",
+				content: [{ type: "input_text", text: `Generate this image: ${params.prompt}` }],
+			},
+		],
+		text: { verbosity: "low" },
+		include: ["reasoning.encrypted_content"],
+		prompt_cache_key: sessionId,
+		tool_choice: "auto",
+		parallel_tool_calls: true,
+		reasoning: { effort: "low", summary: "auto" },
+		tools: [
+			{
+				type: "image_generation",
+				background,
+				model: IMAGE_MODEL,
+				moderation: "auto",
+				output_compression: 100,
+				output_format: outputFormat,
+				quality,
+				size,
+			},
+		],
+	};
+}
+
+async function parseSseForImage(response: Response, signal?: AbortSignal) {
+	if (!response.body) throw new Error("No response body from Codex image generation request.");
+
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+
+	try {
+		while (true) {
+			if (signal?.aborted) throw new Error("Request was aborted");
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+
+			let index: number;
+			while ((index = buffer.indexOf("\n\n")) !== -1) {
+				const chunk = buffer.slice(0, index);
+				buffer = buffer.slice(index + 2);
+				const data = chunk
+					.split("\n")
+					.filter((line) => line.startsWith("data:"))
+					.map((line) => line.slice(5).trim())
+					.join("\n")
+					.trim();
+				if (!data || data === "[DONE]") continue;
+
+				let event: any;
+				try {
+					event = JSON.parse(data);
+				} catch {
+					continue;
+				}
+
+				if (event.type === "error") {
+					throw new Error(event.message || event.code || JSON.stringify(event));
+				}
+				if (event.type === "response.failed") {
+					throw new Error(event.response?.error?.message || "Codex image generation failed.");
+				}
+
+				const item = event.item;
+				if (event.type === "response.output_item.done" && item?.type === "image_generation_call") {
+					if (!item.result) throw new Error("Image generation completed without image data.");
+					return {
+						id: item.id as string,
+						base64: item.result as string,
+						revisedPrompt: (item.revised_prompt ?? item.revisedPrompt) as string | undefined,
+					};
+				}
+			}
+		}
+	} finally {
+		try {
+			reader.releaseLock();
+		} catch {
+			// ignore
+		}
+	}
+
+	throw new Error("No image_generation_call result returned by Codex.");
+}
+
+type ImagegenContext = {
+	cwd: string;
+	model?: { provider: string; id: string };
+	modelRegistry: { getApiKeyForProvider: (provider: string) => Promise<string | undefined> };
+};
+
+type ToolUpdate = (result: { content: Array<{ type: "text"; text: string }>; details?: unknown }) => void;
+
+async function generateImage(params: ToolParams, signal: AbortSignal | undefined, onUpdate: ToolUpdate | undefined, ctx: ImagegenContext) {
+	const token = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
+	if (!token) {
+		throw new Error("Missing OpenAI Codex OAuth credentials. Run /login and select OpenAI ChatGPT Plus/Pro (Codex).");
+	}
+
+	const accountId = getAccountId(token);
+	const responseModel = ctx.model?.provider === PROVIDER ? ctx.model.id : DEFAULT_RESPONSE_MODEL;
+	const sessionId = randomUUID();
+	const body = buildRequest(params, responseModel, sessionId);
+	const outputFormat = params.outputFormat ?? "png";
+	const mimeType = mimeFromFormat(outputFormat);
+
+	onUpdate?.({
+		content: [{ type: "text", text: `Requesting image from ${PROVIDER}/${IMAGE_MODEL}...` }],
+		details: { provider: PROVIDER, imageModel: IMAGE_MODEL, responseModel },
+	});
+
+	const response = await fetch(`${CODEX_BASE_URL}/codex/responses`, {
+		method: "POST",
+		headers: {
+			Authorization: `Bearer ${token}`,
+			"chatgpt-account-id": accountId,
+			originator: "pi-imagegen-extension",
+			"OpenAI-Beta": "responses=experimental",
+			accept: "text/event-stream",
+			"content-type": "application/json",
+			session_id: sessionId,
+			"x-client-request-id": sessionId,
+			"User-Agent": `pi-imagegen-extension (${process.platform}; ${process.arch})`,
+		},
+		body: JSON.stringify(body),
+		signal,
+	});
+
+	if (!response.ok) {
+		const errorText = await response.text();
+		throw new Error(`Codex image request failed (${response.status}): ${errorText}`);
+	}
+
+	const image = await parseSseForImage(response, signal);
+	const savedPath = resolveOutputPath(params.outputPath, ctx.cwd, image.id, outputFormat);
+	await saveImage(savedPath, image.base64);
+
+	const metadataPath = metadataPathForImage(savedPath);
+	const createdAt = new Date().toISOString();
+	const metadata: ImagegenMetadata = {
+		createdAt,
+		prompt: params.prompt,
+		provider: PROVIDER,
+		responseModel,
+		imageModel: IMAGE_MODEL,
+		imageId: image.id,
+		savedPath,
+		metadataPath,
+		mimeType,
+		revisedPrompt: image.revisedPrompt,
+		size: params.size ?? "auto",
+		quality: params.quality ?? "auto",
+		background: params.background ?? "auto",
+		outputFormat,
+	};
+	await saveMetadata(metadata);
+
+	const details: ImagegenDetails = metadata;
+
+	const text = [
+		`Generated image with ${PROVIDER}/${IMAGE_MODEL}.`,
+		`Saved to: ${savedPath}`,
+		image.revisedPrompt ? `Revised prompt: ${image.revisedPrompt}` : undefined,
+	]
+		.filter(Boolean)
+		.join("\n");
+
+	return { image, text, details };
+}
+
+export default function imagegen(pi: ExtensionAPI) {
+	pi.registerMessageRenderer("imagegen-result", (message, _options, theme) => {
+		const details = message.details as ImagegenMetadata | undefined;
+		const lines = [
+			theme.fg("success", "✓ Image generated"),
+			details?.savedPath ? theme.fg("muted", details.savedPath) : message.content,
+			details?.metadataPath ? theme.fg("dim", `metadata: ${details.metadataPath}`) : undefined,
+		].filter(Boolean) as string[];
+		return new Text(lines.join("\n"), 0, 0);
+	});
+
+	pi.registerTool({
+		name: "imagegen",
+		label: "Imagegen",
+		description:
+			"Generate an image using OpenAI Codex/ChatGPT subscription image generation (gpt-image-2). Returns an image attachment and saves it to disk.",
+		promptSnippet: "Generate images via OpenAI Codex/ChatGPT subscription image generation",
+		promptGuidelines: [
+			"Use imagegen when the user asks to create, generate, draw, render, or make an image.",
+			"Use imagegen instead of writing image-generation API code when the user wants an actual generated image.",
+		],
+		parameters: TOOL_PARAMS,
+
+		async execute(_toolCallId, params: ToolParams, signal, onUpdate, ctx) {
+			const { image, text, details } = await generateImage(params, signal, onUpdate as ToolUpdate | undefined, ctx);
+			pi.events.emit("imagegen:generated", details);
+
+			return {
+				content: [
+					{ type: "text", text },
+					{ type: "image", data: image.base64, mimeType: details.mimeType },
+				],
+				details,
+			};
+		},
+
+		renderResult(result, _options, theme) {
+			const details = result.details as ImagegenDetails | undefined;
+			if (!details) {
+				const first = result.content[0];
+				return new Text(first?.type === "text" ? first.text : "Generated image", 0, 0);
+			}
+			const lines = [
+				theme.fg("success", `✓ Generated image via ${details.imageModel}`),
+				theme.fg("muted", details.savedPath),
+				details.revisedPrompt ? theme.fg("dim", `Prompt: ${details.revisedPrompt}`) : undefined,
+			].filter(Boolean) as string[];
+			return new Text(lines.join("\n"), 0, 0);
+		},
+	});
+
+
+	pi.registerCommand("img", {
+		description: "Image workflows: /img gen|list|open|reveal|path|info ...",
+		handler: async (args, ctx) => {
+			const input = args.trim();
+			const [subcommandRaw = "list", ...restParts] = input.split(/\s+/);
+			const subcommand = subcommandRaw.toLowerCase();
+			const rest = restParts.join(" ").trim();
+
+			if (["help", "-h", "--help"].includes(subcommand)) {
+				pi.sendMessage({
+					customType: "imagegen-result",
+					content: [
+						"Image commands:",
+						"/img gen [--style name] [--size 1536x1024] [--quality medium] <prompt>",
+						"/img batch <count> [--style name] <prompt>",
+						"/img styles",
+						"/img list [count]",
+						"/img open [latest|number|path]",
+						"/img reveal [latest|number|path]",
+						"/img path [latest|number|path]",
+						"/img info [latest|number|path]",
+					].join("\n"),
+					display: true,
+				});
+				return;
+			}
+
+			if (["styles", "style"].includes(subcommand)) {
+				const lines = Object.entries(STYLE_PRESETS).map(([name, preset]) => {
+					return `${name}\n   size=${preset.size ?? "auto"}, quality=${preset.quality ?? "auto"}\n   ${preset.suffix}`;
+				});
+				pi.sendMessage({ customType: "imagegen-result", content: `Image styles:\n\n${lines.join("\n\n")}`, display: true });
+				return;
+			}
+
+			if (["gen", "generate", "create"].includes(subcommand)) {
+				const parsed = parseImgArgs(rest);
+				const prompt = parsed.positional.join(" ").trim();
+				if (!prompt) {
+					ctx.ui.notify("Usage: /img gen [--style name] <prompt>", "warning");
+					return;
+				}
+				if (parsed.options.style && !STYLE_PRESETS[parsed.options.style]) {
+					ctx.ui.notify(`Unknown style '${parsed.options.style}'. Try /img styles.`, "warning");
+					return;
+				}
+				ctx.ui.notify("Generating image...", "info");
+				const { details } = await generateImage(applyStyle(prompt, parsed.options), ctx.signal, undefined, ctx);
+				pi.events.emit("imagegen:generated", details);
+				ctx.ui.notify(`Generated image: ${details.savedPath}`, "success");
+				pi.sendMessage({
+					customType: "imagegen-result",
+					content: `Generated image: ${details.savedPath}`,
+					display: true,
+					details,
+				});
+				return;
+			}
+
+			if (["batch", "variants"].includes(subcommand)) {
+				const [countRaw = "", ...batchRestParts] = rest.split(/\s+/);
+				const count = Math.min(Math.max(Number.parseInt(countRaw, 10) || 0, 1), 12);
+				const parsed = parseImgArgs(batchRestParts.join(" "));
+				const prompt = parsed.positional.join(" ").trim();
+				if (!count || !prompt) {
+					ctx.ui.notify("Usage: /img batch <count> [--style name] <prompt>", "warning");
+					return;
+				}
+				if (parsed.options.style && !STYLE_PRESETS[parsed.options.style]) {
+					ctx.ui.notify(`Unknown style '${parsed.options.style}'. Try /img styles.`, "warning");
+					return;
+				}
+				const batchDir = join(getAgentDir(), "generated-images", "batches", batchDirName(prompt));
+				const results: ImagegenDetails[] = [];
+				for (let index = 0; index < count; index++) {
+					ctx.ui.notify(`Generating image ${index + 1}/${count}...`, "info");
+					const params = applyStyle(`${prompt}. Variation ${index + 1} of ${count}; make this composition distinct from the others.`, {
+						...parsed.options,
+						outputPath: join(batchDir, `${String(index + 1).padStart(2, "0")}.png`),
+					});
+					const { details } = await generateImage(params, ctx.signal, undefined, ctx);
+					pi.events.emit("imagegen:generated", details);
+					results.push(details);
+				}
+				const batchPath = join(batchDir, "batch.json");
+				await mkdir(batchDir, { recursive: true });
+				await writeFile(batchPath, JSON.stringify({ createdAt: new Date().toISOString(), prompt, count, images: results }, null, 2), "utf8");
+				pi.sendMessage({
+					customType: "imagegen-result",
+					content: [`Generated ${results.length} images:`, ...results.map((item, i) => `${i + 1}. ${item.savedPath}`), `Batch: ${batchPath}`].join("\n"),
+					display: true,
+					details: { batchPath, images: results },
+				});
+				ctx.ui.notify(`Generated batch: ${batchDir}`, "success");
+				return;
+			}
+
+			if (["list", "ls", "recent"].includes(subcommand)) {
+				const limit = Math.min(Math.max(Number.parseInt(rest || "10", 10) || 10, 1), 50);
+				const recent = await readRecentMetadata(limit);
+				if (recent.length === 0) {
+					ctx.ui.notify("No imagegen outputs found.", "info");
+					return;
+				}
+				const lines = recent.map((item, index) => {
+					const prompt = item.prompt.length > 90 ? `${item.prompt.slice(0, 87)}...` : item.prompt;
+					return `${index + 1}. ${basename(item.savedPath)}\n   ${item.savedPath}\n   ${prompt}`;
+				});
+				pi.sendMessage({
+					customType: "imagegen-result",
+					content: `Recent generated images:\n\n${lines.join("\n\n")}`,
+					display: true,
+					details: { recent },
+				});
+				return;
+			}
+
+			if (["open", "reveal", "path", "info"].includes(subcommand)) {
+				const path = await resolveImageTarget(rest, ctx.cwd);
+				if (!path) {
+					ctx.ui.notify("No generated image found. Try /img list first.", "warning");
+					return;
+				}
+
+				if (subcommand === "open") {
+					macOpen(path);
+					ctx.ui.notify(`Opened ${path}`, "success");
+					return;
+				}
+
+				if (subcommand === "reveal") {
+					macOpen(path, true);
+					ctx.ui.notify(`Revealed ${path}`, "success");
+					return;
+				}
+
+				if (subcommand === "path") {
+					pi.sendMessage({
+						customType: "imagegen-result",
+						content: path,
+						display: true,
+						details: { savedPath: path },
+					});
+					return;
+				}
+
+				const metaPath = metadataPathForImage(path);
+				let content = `Image: ${path}`;
+				let details: unknown = { savedPath: path };
+				try {
+					const metadata = JSON.parse(await readFile(metaPath, "utf8")) as ImagegenMetadata;
+					content = JSON.stringify(metadata, null, 2);
+					details = metadata;
+				} catch {
+					content = `Image: ${path}\nNo metadata sidecar found at ${metaPath}`;
+				}
+				pi.sendMessage({ customType: "imagegen-result", content, display: true, details });
+				return;
+			}
+
+			ctx.ui.notify(`Unknown /img subcommand: ${subcommand}. Try /img help.`, "warning");
+		},
+	});
+}

@@ -1,0 +1,11 @@
+{
+  "name": "pi-imagegen",
+  "version": "0.1.0",
+  "description": "Pi extension for OpenAI/Codex subscription image generation and image studio.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "image-generation"],
+  "files": ["imagegen.ts", "README.md"],
+  "peerDependencies": {"@mariozechner/pi-coding-agent": "*"},
+  "pi": {"extensions": ["./imagegen.ts"]}
+}
