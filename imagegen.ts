@@ -678,9 +678,10 @@ body::after{
   font-variant-numeric:tabular-nums;white-space:nowrap;margin-bottom:6px;
 }
 
-.wall{column-width:300px;column-gap:18px;max-width:1500px;margin:0 auto}
+.wall{max-width:1500px;margin:0 auto;display:grid;grid-template-columns:repeat(var(--cols,4),minmax(0,1fr));gap:18px;align-items:start}
+.mcol{display:flex;flex-direction:column;gap:18px;min-width:0}
 .tile{
-  display:block;break-inside:avoid;margin:0 0 18px;padding:0;
+  display:block;margin:0;padding:0;
   border:0;background:transparent;cursor:pointer;position:relative;
   appearance:none;-webkit-appearance:none;line-height:0;text-align:left;
 }
@@ -881,8 +882,8 @@ body::after{
   .canvas{padding:24px 16px 280px}
   .headline{margin-bottom:18px;gap:12px}
   .headline .rule{display:none}
-  .wall{column-width:160px;column-gap:10px}
-  .tile{margin-bottom:10px}
+  .wall{gap:10px}
+  .mcol{gap:10px}
   .composer{width:calc(100vw - 24px);bottom:14px;padding:14px 14px 10px;border-radius:12px}
   .promptBox{font-size:18px}
   .promptRow{padding:2px 2px 12px;gap:8px}
@@ -983,12 +984,15 @@ function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('show')
 function batchKey(x){return x.batchId||(x.savedPath.includes('/batches/')?x.savedPath.split('/batches/')[1]?.split('/')[0]:'')||''}
 function passes(x){if(filter==='batch'&&!batchKey(x))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;return true}
 function visibleImages(){return images.filter(passes)}
+function columnCount(){const w=$('#wall')?.clientWidth||window.innerWidth;return Math.max(1,Math.min(6,Math.floor(w/292)||1))}
+function tileHtml(x){return '<div class="tile" role="button" tabindex="0" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></div>'}
 
 function render(){
   const visible=visibleImages();
   $('#count').textContent=pad(visible.length)+' '+(visible.length===1?'plate':'plates');
   if(!visible.length){
     const blank=!images.length;
+    $('#wall').style.removeProperty('--cols');
     $('#wall').innerHTML='<div class="empty">'+
       '<div class="mark">'+(blank?'¶':'∅')+'</div>'+
       '<h2>'+(blank?'A blank canvas.':'Nothing in this view.')+'</h2>'+
@@ -997,7 +1001,11 @@ function render(){
     '</div>';
     return;
   }
-  $('#wall').innerHTML=visible.map((x)=>'<div class="tile" role="button" tabindex="0" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></div>').join('');
+  const cols=columnCount();
+  $('#wall').style.setProperty('--cols',String(cols));
+  const buckets=Array.from({length:cols},()=>[]);
+  visible.forEach((x,i)=>buckets[i%cols].push(x));
+  $('#wall').innerHTML=buckets.map(col=>'<div class="mcol">'+col.map(tileHtml).join('')+'</div>').join('');
   $$('.tile').forEach(t=>{t.onclick=()=>select(t.dataset.id);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.dataset.id)}}});
 }
 
