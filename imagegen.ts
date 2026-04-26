@@ -688,7 +688,6 @@ body::after{
   display:block;width:100%;height:auto;object-fit:contain;border-radius:0;cursor:pointer;
   background:var(--paper-2);
   box-shadow:0 1px 0 var(--hair),0 2px 12px -8px rgba(14,13,11,0.10);
-  transition:filter .18s ease;
 }
 .tile::after{
   content:"";position:absolute;inset:0;pointer-events:none;
@@ -697,7 +696,6 @@ body::after{
 }
 .tile:hover::after{border-color:var(--hair-3)}
 .tile:hover img{
-  filter:contrast(1.015) brightness(.99);
   box-shadow:0 1px 0 var(--hair),0 2px 12px -8px rgba(14,13,11,0.10);
 }
 .tile:focus-visible{outline:none}
@@ -999,7 +997,7 @@ function render(){
     '</div>';
     return;
   }
-  $('#wall').innerHTML=visible.map((x)=>'<button type="button" class="tile" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></button>').join('');
+  $('#wall').innerHTML=visible.map((x)=>'<div class="tile" role="button" tabindex="0" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></div>').join('');
   $$('.tile').forEach(t=>{t.onclick=()=>select(t.dataset.id);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.dataset.id)}}});
 }
 
