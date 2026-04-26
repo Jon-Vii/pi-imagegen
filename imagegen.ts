@@ -612,12 +612,12 @@ body{
 .wall{column-width:300px;column-gap:18px;max-width:1500px;margin:0 auto}
 .tile{
   display:block;break-inside:avoid;margin:0 0 18px;padding:0;
-  border:0;background:transparent;cursor:zoom-in;position:relative;
+  border:0;background:transparent;cursor:pointer;position:relative;
   opacity:0;animation:rise .55s cubic-bezier(.2,.7,.2,1) forwards;
 }
 @keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .tile img{
-  display:block;width:100%;height:auto;object-fit:contain;border-radius:0;
+  display:block;width:100%;height:auto;object-fit:contain;border-radius:0;cursor:pointer;
   background:var(--paper-2);
   box-shadow:0 1px 0 var(--hair);
   transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s ease;
