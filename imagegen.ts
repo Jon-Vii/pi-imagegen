@@ -1176,26 +1176,15 @@ export default function imagegen(pi: ExtensionAPI) {
 		return `http://${host}`;
 	}
 
-	function isStudioRequestAuthorized(req: IncomingMessage, url: URL): boolean {
-		if (url.searchParams.get("token") === studioToken) return true;
-		// Browser requests from the studio page are same-origin. This makes the UI
-		// robust if a fetch accidentally drops the query token, while still
-		// rejecting cross-site localhost probes.
-		const referer = req.headers.referer;
-		if (referer) {
-			try {
-				return new URL(referer).origin === getRequestOrigin(req);
-			} catch {
-				return false;
-			}
-		}
-		return false;
+	function isLocalStudioRequest(req: IncomingMessage): boolean {
+		const host = req.headers.host ?? "";
+		return host.startsWith("127.0.0.1:") || host.startsWith("localhost:") || host === "127.0.0.1" || host === "localhost";
 	}
 
 	async function handleStudioRequest(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", getRequestOrigin(req));
-		if (url.pathname !== "/favicon.ico" && !isStudioRequestAuthorized(req, url)) {
-			writeText(res, 403, "Studio session expired. Run /img studio again or refresh the studio window.");
+		if (url.pathname !== "/favicon.ico" && !isLocalStudioRequest(req)) {
+			writeText(res, 403, "Forbidden");
 			return;
 		}
 		if (url.pathname === "/favicon.ico") return writeText(res, 204, "");
