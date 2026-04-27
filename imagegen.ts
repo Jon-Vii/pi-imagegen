@@ -1171,10 +1171,26 @@ export default function imagegen(pi: ExtensionAPI) {
 		});
 	}
 
+	function isStudioRequestAuthorized(req: IncomingMessage, url: URL): boolean {
+		if (url.searchParams.get("token") === studioToken) return true;
+		// Browser requests from the already-authorized studio page are same-origin.
+		// This makes the UI robust if a fetch accidentally drops the query token,
+		// while still rejecting cross-site localhost probes.
+		const referer = req.headers.referer;
+		if (referer && studioBaseUrl) {
+			try {
+				return new URL(referer).origin === new URL(studioBaseUrl).origin;
+			} catch {
+				return false;
+			}
+		}
+		return false;
+	}
+
 	async function handleStudioRequest(req: IncomingMessage, res: ServerResponse) {
 		const url = new URL(req.url ?? "/", "http://127.0.0.1");
-		if (url.pathname !== "/favicon.ico" && url.searchParams.get("token") !== studioToken) {
-			writeText(res, 403, "Forbidden");
+		if (url.pathname !== "/favicon.ico" && !isStudioRequestAuthorized(req, url)) {
+			writeText(res, 403, "Studio session expired. Run /img studio again or refresh the studio window.");
 			return;
 		}
 		if (url.pathname === "/favicon.ico") return writeText(res, 204, "");
