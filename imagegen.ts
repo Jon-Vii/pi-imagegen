@@ -27,6 +27,7 @@ const SIZES = ["auto", "1024x1024", "1536x1024", "1024x1536"] as const;
 const QUALITIES = ["auto", "low", "medium", "high"] as const;
 const BACKGROUNDS = ["auto", "opaque", "transparent"] as const;
 const OUTPUT_FORMATS = ["png", "webp", "jpeg"] as const;
+const THINKING_MODES = ["off", "minimal", "low", "medium", "high"] as const;
 
 const STYLE_PRESETS: Record<string, Partial<ToolParams> & { suffix: string }> = {
 	"minecraft-screenshot": {
@@ -60,6 +61,12 @@ const TOOL_PARAMS = Type.Object({
 	quality: Type.Optional(StringEnum(QUALITIES)),
 	background: Type.Optional(StringEnum(BACKGROUNDS)),
 	outputFormat: Type.Optional(StringEnum(OUTPUT_FORMATS)),
+	thinking: Type.Optional(
+		StringEnum(THINKING_MODES, {
+			description:
+				"Dispatcher model reasoning effort before calling image_generation. Use 'off' to omit explicit reasoning. Defaults to 'low'.",
+		}),
+	),
 	outputPath: Type.Optional(
 		Type.String({
 			description:
@@ -85,6 +92,7 @@ interface ImagegenMetadata {
 	quality: string;
 	background: string;
 	outputFormat: string;
+	thinking: string;
 	batchId?: string;
 	batchPrompt?: string;
 	batchIndex?: number;
@@ -104,6 +112,7 @@ interface ImagegenDetails {
 	quality: string;
 	background: string;
 	outputFormat: string;
+	thinking: string;
 }
 
 interface CodexAccountClaims {
@@ -251,6 +260,9 @@ function parseImgArgs(input: string): { options: Partial<ToolParams> & { style?:
 		} else if ((token === "--format" || token === "--output-format") && next) {
 			options.outputFormat = next as ToolParams["outputFormat"];
 			index++;
+		} else if ((token === "--thinking" || token === "--reasoning") && next) {
+			options.thinking = next as ToolParams["thinking"];
+			index++;
 		} else if ((token === "--out" || token === "--output") && next) {
 			options.outputPath = next;
 			index++;
@@ -270,6 +282,7 @@ function applyStyle(prompt: string, options: Partial<ToolParams> & { style?: str
 		quality: options.quality ?? preset?.quality,
 		background: options.background ?? preset?.background,
 		outputFormat: options.outputFormat ?? preset?.outputFormat,
+		thinking: options.thinking,
 		outputPath: options.outputPath,
 	};
 }
@@ -304,8 +317,8 @@ function buildRequest(params: ToolParams, responseModel: string, sessionId: stri
 	const quality = params.quality ?? "auto";
 	const background = params.background ?? "auto";
 	const outputFormat = params.outputFormat ?? "png";
-
-	return {
+	const thinking = params.thinking ?? "low";
+	const request: any = {
 		model: responseModel,
 		store: false,
 		stream: true,
@@ -318,11 +331,9 @@ function buildRequest(params: ToolParams, responseModel: string, sessionId: stri
 			},
 		],
 		text: { verbosity: "low" },
-		include: ["reasoning.encrypted_content"],
 		prompt_cache_key: sessionId,
 		tool_choice: "auto",
 		parallel_tool_calls: true,
-		reasoning: { effort: "low", summary: "auto" },
 		tools: [
 			{
 				type: "image_generation",
@@ -336,6 +347,11 @@ function buildRequest(params: ToolParams, responseModel: string, sessionId: stri
 			},
 		],
 	};
+	if (thinking !== "off") {
+		request.include = ["reasoning.encrypted_content"];
+		request.reasoning = { effort: thinking, summary: "auto" };
+	}
+	return request;
 }
 
 async function parseSseForImage(response: Response, signal?: AbortSignal) {
@@ -475,6 +491,7 @@ async function generateImage(
 		quality: params.quality ?? "auto",
 		background: params.background ?? "auto",
 		outputFormat,
+		thinking: params.thinking ?? "low",
 		...extraMetadata,
 	};
 	await saveMetadata(metadata);
@@ -954,6 +971,15 @@ body::after{
           <option value="low">low</option>
         </select>
       </div>
+      <div class="field"><label>Thinking</label>
+        <select id="thinking" class="select">
+          <option value="off">off</option>
+          <option value="minimal">minimal</option>
+          <option value="low" selected>low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </div>
       <div class="field"><label>Count</label>
         <div class="steps" id="counts">
           <button type="button" data-n="1" class="active">1</button>
@@ -1072,7 +1098,7 @@ $('#composer').onsubmit=async e=>{
   const wrap=$('#status-wrap'),statusEl=$('#status');
   wrap.classList.remove('live');wrap.classList.add('busy');statusEl.textContent='Generating';
   try{
-    await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,count})});
+    await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count})});
     toast('Generation started');
   }catch(err){toast(err.message)}
   finally{btn.disabled=false;if(lbl)lbl.textContent='Generate';wrap.classList.remove('busy')}
@@ -1165,10 +1191,15 @@ export default function imagegen(pi: ExtensionAPI) {
 			const style = String(body.style ?? "").trim();
 			if (!prompt) return writeJson(res, 400, { ok: false, error: "Prompt is required." });
 			if (style && !STYLE_PRESETS[style]) return writeJson(res, 400, { ok: false, error: `Unknown style: ${style}` });
+			const thinking = String(body.thinking ?? "low");
+			if (!THINKING_MODES.includes(thinking as (typeof THINKING_MODES)[number])) {
+				return writeJson(res, 400, { ok: false, error: `Unknown thinking mode: ${thinking}` });
+			}
 			const options = {
 				style: style || undefined,
 				size: String(body.size ?? "auto") as ToolParams["size"],
 				quality: String(body.quality ?? "auto") as ToolParams["quality"],
+				thinking: thinking as ToolParams["thinking"],
 			};
 			const results: ImagegenDetails[] = [];
 			if (count === 1) {
@@ -1314,8 +1345,8 @@ export default function imagegen(pi: ExtensionAPI) {
 					customType: "imagegen-result",
 					content: [
 						"Image commands:",
-						"/img gen [--style name] [--size 1536x1024] [--quality medium] <prompt>",
-						"/img batch <count> [--style name] <prompt>",
+						"/img gen [--thinking off|minimal|low|medium|high] [--style name] <prompt>",
+						"/img batch <count> [--thinking off|minimal|low|medium|high] [--style name] <prompt>",
 						"/img styles",
 						"/img studio",
 						"/img list [count]",
@@ -1353,6 +1384,10 @@ export default function imagegen(pi: ExtensionAPI) {
 					ctx.ui.notify(`Unknown style '${parsed.options.style}'. Try /img styles.`, "warning");
 					return;
 				}
+				if (parsed.options.thinking && !THINKING_MODES.includes(parsed.options.thinking)) {
+					ctx.ui.notify(`Unknown thinking mode '${parsed.options.thinking}'.`, "warning");
+					return;
+				}
 				ctx.ui.notify("Generating image...", "info");
 				const { details } = await generateImage(applyStyle(prompt, parsed.options), ctx.signal, undefined, ctx);
 				pi.events.emit("imagegen:generated", details);
@@ -1378,6 +1413,10 @@ export default function imagegen(pi: ExtensionAPI) {
 				}
 				if (parsed.options.style && !STYLE_PRESETS[parsed.options.style]) {
 					ctx.ui.notify(`Unknown style '${parsed.options.style}'. Try /img styles.`, "warning");
+					return;
+				}
+				if (parsed.options.thinking && !THINKING_MODES.includes(parsed.options.thinking)) {
+					ctx.ui.notify(`Unknown thinking mode '${parsed.options.thinking}'.`, "warning");
 					return;
 				}
 				const batchId = batchDirName(prompt);
