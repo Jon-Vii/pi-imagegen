@@ -1080,7 +1080,7 @@ async function generateFromSelected(prompt,countOverride=count){
 async function act(a){
   if(!selected)return;
   if(a==='copyprompt'){await navigator.clipboard.writeText(selectedPrompt());return toast('Prompt copied')}
-  if(a==='vary')return setComposerPrompt(selectedPrompt()+'\n\nVariation: ')
+  if(a==='vary')return setComposerPrompt(selectedPrompt()+'\\n\\nVariation: ')
   if(a==='rerun'){await generateFromSelected(selectedPrompt());return toast('Rerunning')}
   if(a==='ref'){await api('/api/insert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})});return toast('Reference attached')}
   if(a==='copypath'){await navigator.clipboard.writeText(selected.savedPath);return toast('Path copied')}
