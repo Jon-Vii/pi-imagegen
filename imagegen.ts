@@ -982,9 +982,9 @@ body::after{
       </div>
       <div class="field"><label>Count</label>
         <div class="steps" id="counts">
-          <button type="button" data-n="1" class="active">1</button>
+          <button type="button" data-n="1">1</button>
           <button type="button" data-n="2">2</button>
-          <button type="button" data-n="4">4</button>
+          <button type="button" data-n="4" class="active">4</button>
           <button type="button" data-n="6">6</button>
           <button type="button" data-n="9">9</button>
         </div>
@@ -1000,7 +1000,7 @@ body::after{
 </div>
 <script>
 const TOKEN=${JSON.stringify(token)};
-let images=[],selected=null,filter='all',count=1;
+let images=[],selected=null,filter='all',count=4;
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad=n=>String(n).padStart(2,'0');
@@ -1053,10 +1053,12 @@ function openModal(){
       '<button class="nav next" data-nav="next" aria-label="Next">›</button>'+
       '<img class="modalImg" id="mi" alt="">'+
       '<div class="modal-bar">'+
+        '<button data-act="vary">Vary</button>'+
+        '<button data-act="rerun">Rerun</button>'+
+        '<button data-act="ref">Use ref</button>'+
+        '<button data-act="copyprompt">Copy prompt</button>'+
         '<button data-act="open">Open</button>'+
         '<button data-act="reveal">Reveal</button>'+
-        '<button data-act="attach">Attach</button>'+
-        '<button data-act="copypath">Copy path</button>'+
       '</div>';
     $('[data-close]').onclick=closeModal;
     $$('[data-act]').forEach(b=>b.onclick=e=>{e.stopPropagation();act(b.dataset.act)});
@@ -1070,8 +1072,17 @@ function openModal(){
 function closeModal(){selected=null;const m=$('#modal');m.classList.remove('open');m.setAttribute('aria-hidden','true');m.innerHTML=''}
 function move(delta){const v=visibleImages();if(!selected||!v.length)return;const i=v.findIndex(x=>x.imageId===selected.imageId);selected=v[(i+delta+v.length)%v.length];openModal()}
 
+function selectedPrompt(){return selected?.batchPrompt || selected?.prompt || ''}
+function setComposerPrompt(text){ta.value=text;autosize();ta.focus();closeModal()}
+async function generateFromSelected(prompt,countOverride=count){
+  await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count:countOverride})});
+}
 async function act(a){
   if(!selected)return;
+  if(a==='copyprompt'){await navigator.clipboard.writeText(selectedPrompt());return toast('Prompt copied')}
+  if(a==='vary')return setComposerPrompt(selectedPrompt()+'\n\nVariation: ')
+  if(a==='rerun'){await generateFromSelected(selectedPrompt());return toast('Rerunning')}
+  if(a==='ref'){await api('/api/insert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})});return toast('Reference attached')}
   if(a==='copypath'){await navigator.clipboard.writeText(selected.savedPath);return toast('Path copied')}
   await api('/api/'+(a==='attach'?'insert':a),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})});
   toast(a==='attach'?'Attached':a);
