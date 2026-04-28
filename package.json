@@ -1,11 +1,37 @@
 {
   "name": "pi-imagegen",
   "version": "0.1.0",
-  "description": "Pi extension for OpenAI/Codex subscription image generation and image studio.",
+  "description": "Pi package for OpenAI/Codex image generation with a local browser studio.",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "pi-extension", "image-generation"],
-  "files": ["imagegen.ts", "README.md"],
-  "peerDependencies": {"@mariozechner/pi-coding-agent": "*"},
-  "pi": {"extensions": ["./imagegen.ts"]}
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "image-generation",
+    "codex",
+    "gpt-image-2"
+  ],
+  "files": [
+    "imagegen.ts",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jon-Vii/pi-imagegen.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Jon-Vii/pi-imagegen/issues"
+  },
+  "homepage": "https://github.com/Jon-Vii/pi-imagegen#readme",
+  "peerDependencies": {
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./imagegen.ts"
+    ]
+  }
 }

@@ -1,0 +1,9 @@
+node_modules/
+npm-debug.log*
+*.tgz
+
+# Local/generated image artifacts
+/generated-images/
+design-mockup-*.png
+design-mockup-*.json
+*.local.*
