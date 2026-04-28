@@ -797,12 +797,13 @@ body::after{
   background:linear-gradient(180deg,rgba(255,255,255,0.65),transparent 38%);
   mix-blend-mode:overlay;opacity:0.7;
 }
-.refs{display:flex;gap:8px;flex-wrap:wrap;padding:0 6px 10px}
-.refs:not(.hasRefs){padding-bottom:10px}
+.refs{display:none;gap:8px;flex-wrap:wrap;padding:0 6px 10px}
+.refs.hasRefs{display:flex}
 .ref-chip{position:relative;width:54px;height:42px;border:1px solid var(--hair-2);background:var(--paper-2);overflow:hidden}
 .ref-chip img{width:100%;height:100%;object-fit:cover;display:block}
 .ref-chip button{position:absolute;right:2px;top:2px;border:0;background:rgba(250,250,246,.9);color:var(--ink);width:18px;height:18px;border-radius:999px;cursor:pointer;font-size:12px;line-height:1}
-.sketch-ref{border:1px dashed var(--hair-3);background:rgba(255,255,255,.45);color:var(--ink-2);height:42px;padding:0 12px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer}
+.draw-btn{border:1px solid var(--hair);background:rgba(255,255,255,.58);color:var(--ink-2);font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;border-radius:8px;height:34px;padding:0 12px;cursor:pointer}
+.draw-btn:hover{background:var(--paper-2);color:var(--ink)}
 .promptRow{display:flex;align-items:flex-start;gap:12px;padding:4px 6px 14px}
 .slash{
   font-family:var(--mono);font-size:11px;color:var(--muted);
@@ -984,7 +985,6 @@ body::after{
     <nav class="filters">
       <button class="active" data-filter="all">All</button>
       <button data-filter="batch">Batches</button>
-      <button data-filter="tmp">Scratch</button>
     </nav>
     <div class="right" id="status-wrap">
       <span class="pulse"></span>
@@ -1064,6 +1064,7 @@ body::after{
         </div>
       </div>
       <span class="spacer"></span>
+      <button id="openSketch" class="draw-btn" type="button">Draw</button>
       <button id="generate" class="generate" type="submit">
         <span>Generate</span>
         <span class="ret" aria-hidden="true">↩</span>
@@ -1081,10 +1082,11 @@ const pad=n=>String(n).padStart(2,'0');
 const imgUrl=x=>'/api/image/'+encodeURIComponent(x.imageId)+'?token='+encodeURIComponent(TOKEN);
 async function api(path,opts={}){const sep=path.includes('?')?'&':'?';const r=await fetch(path+sep+'token='+encodeURIComponent(TOKEN),opts);if(!r.ok)throw new Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),1800)}
-function renderRefs(){const el=$('#refs');el.classList.toggle('hasRefs',refs.length>0);el.innerHTML=refs.map(r=>'<div class="ref-chip" title="Reference image"><img src="'+imgUrl(r)+'" alt=""><button type="button" data-ref="'+esc(r.imageId)+'" aria-label="Remove reference">×</button></div>').join('')+'<button type="button" class="sketch-ref" id="openSketch">+ Sketch</button>';$$('[data-ref]').forEach(b=>b.onclick=()=>{refs=refs.filter(r=>r.imageId!==b.dataset.ref);renderRefs()});$('#openSketch').onclick=openSketch}
+function renderRefs(){const el=$('#refs');el.classList.toggle('hasRefs',refs.length>0);el.innerHTML=refs.map(r=>'<div class="ref-chip" title="Reference image"><img src="'+imgUrl(r)+'" alt=""><button type="button" data-ref="'+esc(r.imageId)+'" aria-label="Remove reference">×</button></div>').join('');$$('[data-ref]').forEach(b=>b.onclick=()=>{refs=refs.filter(r=>r.imageId!==b.dataset.ref);renderRefs()})}
 function addRef(x){if(!x||refs.some(r=>r.imageId===x.imageId))return;refs.push(x);renderRefs();toast('Reference added')}
 function batchKey(x){return x.batchId||(x.savedPath.includes('/batches/')?x.savedPath.split('/batches/')[1]?.split('/')[0]:'')||''}
-function passes(x){if(filter==='batch'&&!batchKey(x))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;return true}
+function isOutput(x){return x.kind!=='sketch'&&x.provider!=='local-sketch'}
+function passes(x){if(!isOutput(x))return false;if(filter==='batch'&&!batchKey(x))return false;return true}
 function visibleImages(){return images.filter(passes)}
 function columnCount(){const w=$('#wall')?.clientWidth||window.innerWidth;return Math.max(1,Math.min(6,Math.floor(w/292)||1))}
 function tileHtml(x){return '<div class="tile" role="button" tabindex="0" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></div>'}
@@ -1241,7 +1243,7 @@ sketchCanvas.addEventListener('pointermove',e=>{if(!drawing)return;const p=sketc
 sketchCanvas.addEventListener('pointerup',()=>{drawing=false;last=null})
 $('#sketchBrush').onclick=()=>{sketchTool='brush';$('#sketchBrush').classList.add('active');$('#sketchEraser').classList.remove('active')}
 $('#sketchEraser').onclick=()=>{sketchTool='eraser';$('#sketchEraser').classList.add('active');$('#sketchBrush').classList.remove('active')}
-$('#sketchClear').onclick=initSketch;$('#sketchClose').onclick=closeSketch;
+$('#openSketch').onclick=openSketch;$('#sketchClear').onclick=initSketch;$('#sketchClose').onclick=closeSketch;
 $('#sketchUse').onclick=async()=>{const blob=await new Promise(r=>sketchCanvas.toBlob(r,'image/png'));const res=await api('/api/sketch',{method:'POST',headers:{'content-type':'image/png'},body:blob});addRef(res.metadata);closeSketch();initSketch()};
 initSketch();
 load();
