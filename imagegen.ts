@@ -1146,7 +1146,7 @@ $('#counts').addEventListener('click',e=>{const b=e.target.closest('button');if(
 
 $('#composer').onsubmit=async e=>{
   e.preventDefault();
-  const prompt=ta.value.trim();if(!prompt)return;
+  const prompt=ta.value.trim();if(!prompt && refs.length===0)return toast('Add a prompt or reference');
   const btn=$('#generate'),lbl=btn.querySelector('span:first-child');
   btn.disabled=true;if(lbl)lbl.textContent='Generating';
   const wrap=$('#status-wrap'),statusEl=$('#status');
