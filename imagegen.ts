@@ -719,14 +719,14 @@ body::after{
 .tile:focus-visible{outline:none}
 .tile:focus-visible::after{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 
-.batch-list{max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:46px}
-.batch-sheet{display:block}
-.batch-head{display:flex;align-items:end;gap:18px;margin:0 0 14px}
-.batch-title{font-family:var(--serif);font-style:italic;font-size:24px;line-height:1.1;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(760px,70vw)}
-.batch-rule{height:1px;background:var(--hair);flex:1;margin-bottom:8px}
-.batch-meta{font-family:var(--mono);font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--muted);white-space:nowrap;margin-bottom:3px}
-.batch-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;align-items:start}
-.batch-grid .tile{max-width:420px}
+.batch-list{max-width:1500px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:18px;align-items:start}
+.batch-card{background:rgba(255,255,255,0.46);border:1px solid var(--hair);border-radius:10px;padding:10px;box-shadow:var(--shadow-card);backdrop-filter:blur(8px) saturate(1.03)}
+.batch-preview{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;min-height:120px;align-items:center;background:rgba(245,242,234,0.48);padding:7px;border:1px solid var(--hair)}
+.batch-preview .tile{margin:0;min-width:0}
+.batch-preview .tile img{max-height:150px;width:100%;object-fit:contain}
+.batch-info{display:grid;gap:4px;padding:10px 2px 1px}
+.batch-title{font-family:var(--serif);font-style:italic;font-size:17px;line-height:1.2;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.batch-meta{font-family:var(--mono);font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
 
 /* ─────────── empty state ─────────── */
 .empty{max-width:560px;margin:14vh auto;text-align:center;color:var(--muted)}
@@ -910,11 +910,8 @@ body::after{
   .headline .rule{display:none}
   .wall{gap:10px}
   .mcol{gap:10px}
-  .batch-list{gap:34px}
-  .batch-head{align-items:start;flex-direction:column;gap:6px}
-  .batch-rule{display:none}
-  .batch-title{max-width:100%;font-size:21px}
-  .batch-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+  .batch-list{grid-template-columns:1fr;gap:12px}
+  .batch-title{font-size:16px}
   .composer{width:calc(100vw - 24px);bottom:14px;padding:14px 14px 10px;border-radius:12px}
   .promptBox{font-size:18px}
   .promptRow{padding:2px 2px 12px;gap:8px}
@@ -1052,7 +1049,8 @@ function renderBatches(visible){
   $('#wall').innerHTML=sorted.map(g=>{
     const items=g.items.slice().sort((a,b)=>(a.batchIndex||0)-(b.batchIndex||0)||a.createdAt.localeCompare(b.createdAt));
     const date=g.date?new Date(g.date).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
-    return '<section class="batch-sheet"><div class="batch-head"><div class="batch-title">'+esc(g.title)+'</div><span class="batch-rule"></span><div class="batch-meta">'+pad(items.length)+' plates'+(date?' · '+esc(date):'')+'</div></div><div class="batch-grid">'+items.map(tileHtml).join('')+'</div></section>'
+    const preview=items.slice(0,4);
+    return '<section class="batch-card"><div class="batch-preview">'+preview.map(tileHtml).join('')+'</div><div class="batch-info"><div class="batch-title">'+esc(g.title)+'</div><div class="batch-meta">'+pad(items.length)+' plates'+(date?' · '+esc(date):'')+'</div></div></section>'
   }).join('');
   bindTiles();
 }
