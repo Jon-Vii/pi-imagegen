@@ -719,6 +719,15 @@ body::after{
 .tile:focus-visible{outline:none}
 .tile:focus-visible::after{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 
+.batch-list{max-width:1500px;margin:0 auto;display:flex;flex-direction:column;gap:46px}
+.batch-sheet{display:block}
+.batch-head{display:flex;align-items:end;gap:18px;margin:0 0 14px}
+.batch-title{font-family:var(--serif);font-style:italic;font-size:24px;line-height:1.1;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:min(760px,70vw)}
+.batch-rule{height:1px;background:var(--hair);flex:1;margin-bottom:8px}
+.batch-meta{font-family:var(--mono);font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--muted);white-space:nowrap;margin-bottom:3px}
+.batch-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;align-items:start}
+.batch-grid .tile{max-width:420px}
+
 /* ─────────── empty state ─────────── */
 .empty{max-width:560px;margin:14vh auto;text-align:center;color:var(--muted)}
 .empty .mark{
@@ -901,6 +910,11 @@ body::after{
   .headline .rule{display:none}
   .wall{gap:10px}
   .mcol{gap:10px}
+  .batch-list{gap:34px}
+  .batch-head{align-items:start;flex-direction:column;gap:6px}
+  .batch-rule{display:none}
+  .batch-title{max-width:100%;font-size:21px}
+  .batch-grid{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
   .composer{width:calc(100vw - 24px);bottom:14px;padding:14px 14px 10px;border-radius:12px}
   .promptBox{font-size:18px}
   .promptRow{padding:2px 2px 12px;gap:8px}
@@ -1012,27 +1026,47 @@ function passes(x){if(filter==='batch'&&!batchKey(x))return false;if(filter==='t
 function visibleImages(){return images.filter(passes)}
 function columnCount(){const w=$('#wall')?.clientWidth||window.innerWidth;return Math.max(1,Math.min(6,Math.floor(w/292)||1))}
 function tileHtml(x){return '<div class="tile" role="button" tabindex="0" aria-label="Open image" data-id="'+esc(x.imageId)+'"><img src="'+imgUrl(x)+'" loading="lazy" alt=""></div>'}
+function bindTiles(){$$('.tile').forEach(t=>{t.onclick=()=>select(t.dataset.id);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.dataset.id)}}})}
+function emptyHtml(blank){return '<div class="empty">'+
+  '<div class="mark">'+(blank?'¶':'∅')+'</div>'+
+  '<h2>'+(blank?'A blank canvas.':'Nothing in this view.')+'</h2>'+
+  '<p>'+(blank?'Type a prompt below. Generations land here — full and uncropped.':'Switch the filter to see other generations.')+'</p>'+
+  (blank?'<div class="kbd"><kbd>/</kbd> focus prompt &nbsp;·&nbsp; <kbd>↩</kbd> generate</div>':'')+
+'</div>'}
+function renderWall(visible){
+  const cols=columnCount();
+  $('#wall').className='wall';
+  $('#wall').style.setProperty('--cols',String(cols));
+  const buckets=Array.from({length:cols},()=>[]);
+  visible.forEach((x,i)=>buckets[i%cols].push(x));
+  $('#wall').innerHTML=buckets.map(col=>'<div class="mcol">'+col.map(tileHtml).join('')+'</div>').join('');
+  bindTiles();
+}
+function renderBatches(visible){
+  $('#wall').className='batch-list';
+  $('#wall').style.removeProperty('--cols');
+  const groups=new Map();
+  visible.filter(x=>batchKey(x)).forEach(x=>{const key=batchKey(x);if(!groups.has(key))groups.set(key,[]);groups.get(key).push(x)});
+  const sorted=[...groups.entries()].map(([key,items])=>({key,items,title:items[0]?.batchPrompt||key,date:items.map(x=>x.createdAt).sort().at(-1)||''})).sort((a,b)=>b.date.localeCompare(a.date));
+  if(!sorted.length){$('#wall').innerHTML=emptyHtml(false);return}
+  $('#wall').innerHTML=sorted.map(g=>{
+    const items=g.items.slice().sort((a,b)=>(a.batchIndex||0)-(b.batchIndex||0)||a.createdAt.localeCompare(b.createdAt));
+    const date=g.date?new Date(g.date).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'';
+    return '<section class="batch-sheet"><div class="batch-head"><div class="batch-title">'+esc(g.title)+'</div><span class="batch-rule"></span><div class="batch-meta">'+pad(items.length)+' plates'+(date?' · '+esc(date):'')+'</div></div><div class="batch-grid">'+items.map(tileHtml).join('')+'</div></section>'
+  }).join('');
+  bindTiles();
+}
 
 function render(){
   const visible=visibleImages();
   $('#count').textContent=pad(visible.length)+' '+(visible.length===1?'plate':'plates');
   if(!visible.length){
-    const blank=!images.length;
+    $('#wall').className='wall';
     $('#wall').style.removeProperty('--cols');
-    $('#wall').innerHTML='<div class="empty">'+
-      '<div class="mark">'+(blank?'¶':'∅')+'</div>'+
-      '<h2>'+(blank?'A blank canvas.':'Nothing in this view.')+'</h2>'+
-      '<p>'+(blank?'Type a prompt below. Generations land here — full and uncropped.':'Switch the filter to see other generations.')+'</p>'+
-      (blank?'<div class="kbd"><kbd>/</kbd> focus prompt &nbsp;·&nbsp; <kbd>↩</kbd> generate</div>':'')+
-    '</div>';
+    $('#wall').innerHTML=emptyHtml(!images.length);
     return;
   }
-  const cols=columnCount();
-  $('#wall').style.setProperty('--cols',String(cols));
-  const buckets=Array.from({length:cols},()=>[]);
-  visible.forEach((x,i)=>buckets[i%cols].push(x));
-  $('#wall').innerHTML=buckets.map(col=>'<div class="mcol">'+col.map(tileHtml).join('')+'</div>').join('');
-  $$('.tile').forEach(t=>{t.onclick=()=>select(t.dataset.id);t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select(t.dataset.id)}}});
+  if(filter==='batch') renderBatches(visible); else renderWall(visible);
 }
 
 async function load(){
