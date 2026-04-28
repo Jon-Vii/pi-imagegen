@@ -797,8 +797,8 @@ body::after{
   background:linear-gradient(180deg,rgba(255,255,255,0.65),transparent 38%);
   mix-blend-mode:overlay;opacity:0.7;
 }
-.refs{display:none;gap:8px;flex-wrap:wrap;padding:0 6px 10px}
-.refs.hasRefs{display:flex}
+.refs{display:flex;gap:8px;flex-wrap:wrap;padding:0 6px 10px}
+.refs:not(.hasRefs){padding-bottom:10px}
 .ref-chip{position:relative;width:54px;height:42px;border:1px solid var(--hair-2);background:var(--paper-2);overflow:hidden}
 .ref-chip img{width:100%;height:100%;object-fit:cover;display:block}
 .ref-chip button{position:absolute;right:2px;top:2px;border:0;background:rgba(250,250,246,.9);color:var(--ink);width:18px;height:18px;border-radius:999px;cursor:pointer;font-size:12px;line-height:1}
