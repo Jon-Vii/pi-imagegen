@@ -1253,7 +1253,6 @@ export default function imagegen(pi: ExtensionAPI) {
 			const prompt = String(body.prompt ?? "").trim();
 			const count = Math.min(Math.max(Number.parseInt(String(body.count ?? "1"), 10) || 1, 1), 12);
 			const style = String(body.style ?? "").trim();
-			if (!prompt) return writeJson(res, 400, { ok: false, error: "Prompt is required." });
 			if (style && !STYLE_PRESETS[style]) return writeJson(res, 400, { ok: false, error: `Unknown style: ${style}` });
 			const thinking = String(body.thinking ?? "low");
 			if (!THINKING_MODES.includes(thinking as (typeof THINKING_MODES)[number])) {
@@ -1261,9 +1260,11 @@ export default function imagegen(pi: ExtensionAPI) {
 			}
 			const referenceIds = Array.isArray(body.references) ? body.references.map(String).slice(0, 8) : [];
 			const references = (await Promise.all(referenceIds.map((id) => findMetadataByImageId(id)))).filter(Boolean) as ImagegenMetadata[];
+			if (!prompt && references.length === 0) return writeJson(res, 400, { ok: false, error: "Prompt or reference image is required." });
+			const basePrompt = prompt || "Create a new image using the provided reference image(s) for visual style, subject, and composition.";
 			const referencePrompt = references.length
-				? `${prompt}\n\nReference image paths for visual style/composition: ${references.map((item) => item.savedPath).join(", ")}`
-				: prompt;
+				? `${basePrompt}\n\nReference image paths for visual style/composition: ${references.map((item) => item.savedPath).join(", ")}`
+				: basePrompt;
 			const referenceMetadata = references.length
 				? { referenceImageIds: references.map((item) => item.imageId), referencePaths: references.map((item) => item.savedPath) }
 				: {};
@@ -1281,7 +1282,7 @@ export default function imagegen(pi: ExtensionAPI) {
 				broadcastStudioEvent("imagegen:generated", details);
 				results.push(details);
 			} else {
-				const batchId = batchDirName(prompt);
+				const batchId = batchDirName(prompt || `reference-${references.map((item) => item.imageId.slice(-6)).join("-")}`);
 				const batchDir = join(getAgentDir(), "generated-images", "batches", batchId);
 				for (let index = 0; index < count; index++) {
 					broadcastStudioEvent("generation:start", { message: `Generating ${index + 1}/${count}…` });
@@ -1291,7 +1292,7 @@ export default function imagegen(pi: ExtensionAPI) {
 					});
 					const { details } = await generateImage(params, lastCtx.signal, undefined, lastCtx, {
 						batchId,
-						batchPrompt: prompt,
+						batchPrompt: prompt || "Reference-only generation",
 						batchIndex: index + 1,
 						batchCount: count,
 						...referenceMetadata,
@@ -1301,7 +1302,7 @@ export default function imagegen(pi: ExtensionAPI) {
 					results.push(details);
 				}
 				await mkdir(batchDir, { recursive: true });
-				await writeFile(join(batchDir, "batch.json"), JSON.stringify({ createdAt: new Date().toISOString(), prompt, count, images: results }, null, 2), "utf8");
+				await writeFile(join(batchDir, "batch.json"), JSON.stringify({ createdAt: new Date().toISOString(), prompt: prompt || "Reference-only generation", references: referenceMetadata, count, images: results }, null, 2), "utf8");
 			}
 			return writeJson(res, 200, { ok: true, images: results });
 		}
