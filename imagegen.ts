@@ -67,6 +67,11 @@ const TOOL_PARAMS = Type.Object({
 				"Dispatcher model reasoning effort before calling image_generation. Use 'off' to omit explicit reasoning. Defaults to 'low'.",
 		}),
 	),
+	referencePaths: Type.Optional(
+		Type.Array(Type.String(), {
+			description: "Optional local image paths to send as visual references using input_image content.",
+		}),
+	),
 	outputPath: Type.Optional(
 		Type.String({
 			description:
@@ -285,6 +290,7 @@ function applyStyle(prompt: string, options: Partial<ToolParams> & { style?: str
 		background: options.background ?? preset?.background,
 		outputFormat: options.outputFormat ?? preset?.outputFormat,
 		thinking: options.thinking,
+		referencePaths: options.referencePaths,
 		outputPath: options.outputPath,
 	};
 }
@@ -314,12 +320,19 @@ function insertImageIntoPrompt(path: string, ctx: ExtensionContext | undefined):
 	return true;
 }
 
-function buildRequest(params: ToolParams, responseModel: string, sessionId: string) {
+async function buildRequest(params: ToolParams, responseModel: string, sessionId: string) {
 	const size = params.size ?? "auto";
 	const quality = params.quality ?? "auto";
 	const background = params.background ?? "auto";
 	const outputFormat = params.outputFormat ?? "png";
 	const thinking = params.thinking ?? "low";
+	const content: any[] = [{ type: "input_text", text: `Generate this image: ${params.prompt}` }];
+	for (const path of params.referencePaths ?? []) {
+		const format = extname(path).toLowerCase() === ".jpg" ? "jpeg" : extname(path).toLowerCase().replace(/^\./, "") || "png";
+		const mimeType = mimeFromFormat(format);
+		const data = await readFile(path);
+		content.push({ type: "input_image", image_url: `data:${mimeType};base64,${data.toString("base64")}` });
+	}
 	const request: any = {
 		model: responseModel,
 		store: false,
@@ -329,7 +342,7 @@ function buildRequest(params: ToolParams, responseModel: string, sessionId: stri
 		input: [
 			{
 				role: "user",
-				content: [{ type: "input_text", text: `Generate this image: ${params.prompt}` }],
+				content,
 			},
 		],
 		text: { verbosity: "low" },
@@ -441,7 +454,7 @@ async function generateImage(
 	const accountId = getAccountId(token);
 	const responseModel = ctx.model?.provider === PROVIDER ? ctx.model.id : DEFAULT_RESPONSE_MODEL;
 	const sessionId = randomUUID();
-	const body = buildRequest(params, responseModel, sessionId);
+	const body = await buildRequest(params, responseModel, sessionId);
 	const outputFormat = params.outputFormat ?? "png";
 	const mimeType = mimeFromFormat(outputFormat);
 
@@ -1262,9 +1275,7 @@ export default function imagegen(pi: ExtensionAPI) {
 			const references = (await Promise.all(referenceIds.map((id) => findMetadataByImageId(id)))).filter(Boolean) as ImagegenMetadata[];
 			if (!prompt && references.length === 0) return writeJson(res, 400, { ok: false, error: "Prompt or reference image is required." });
 			const basePrompt = prompt || "Create a new image using the provided reference image(s) for visual style, subject, and composition.";
-			const referencePrompt = references.length
-				? `${basePrompt}\n\nReference image paths for visual style/composition: ${references.map((item) => item.savedPath).join(", ")}`
-				: basePrompt;
+			const referencePrompt = basePrompt;
 			const referenceMetadata = references.length
 				? { referenceImageIds: references.map((item) => item.imageId), referencePaths: references.map((item) => item.savedPath) }
 				: {};
@@ -1273,6 +1284,7 @@ export default function imagegen(pi: ExtensionAPI) {
 				size: String(body.size ?? "auto") as ToolParams["size"],
 				quality: String(body.quality ?? "auto") as ToolParams["quality"],
 				thinking: thinking as ToolParams["thinking"],
+				referencePaths: references.map((item) => item.savedPath),
 			};
 			const results: ImagegenDetails[] = [];
 			if (count === 1) {
