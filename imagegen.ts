@@ -104,6 +104,7 @@ interface ImagegenMetadata {
 	batchPrompt?: string;
 	batchIndex?: number;
 	batchCount?: number;
+	kind?: "generated" | "sketch";
 }
 
 interface ImagegenDetails {
@@ -539,11 +540,26 @@ function writeText(res: ServerResponse, statusCode: number, text: string) {
 	res.end(text);
 }
 
-async function readJsonBody(req: IncomingMessage): Promise<any> {
+async function readRequestBody(req: IncomingMessage, maxBytes = 20 * 1024 * 1024): Promise<Buffer> {
 	const chunks: Buffer[] = [];
-	for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-	if (chunks.length === 0) return {};
-	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+	let total = 0;
+	for await (const chunk of req) {
+		const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+		total += buffer.length;
+		if (total > maxBytes) throw new Error(`Request body too large; max ${Math.round(maxBytes / 1024 / 1024)}MB.`);
+		chunks.push(buffer);
+	}
+	return Buffer.concat(chunks);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<any> {
+	const body = await readRequestBody(req);
+	if (body.length === 0) return {};
+	return JSON.parse(body.toString("utf8"));
+}
+
+function isPng(buffer: Buffer): boolean {
+	return buffer.length >= 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47 && buffer[4] === 0x0d && buffer[5] === 0x0a && buffer[6] === 0x1a && buffer[7] === 0x0a;
 }
 
 function openBrowser(url: string): Promise<void> {
@@ -786,6 +802,7 @@ body::after{
 .ref-chip{position:relative;width:54px;height:42px;border:1px solid var(--hair-2);background:var(--paper-2);overflow:hidden}
 .ref-chip img{width:100%;height:100%;object-fit:cover;display:block}
 .ref-chip button{position:absolute;right:2px;top:2px;border:0;background:rgba(250,250,246,.9);color:var(--ink);width:18px;height:18px;border-radius:999px;cursor:pointer;font-size:12px;line-height:1}
+.sketch-ref{border:1px dashed var(--hair-3);background:rgba(255,255,255,.45);color:var(--ink-2);height:42px;padding:0 12px;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;cursor:pointer}
 .promptRow{display:flex;align-items:flex-start;gap:12px;padding:4px 6px 14px}
 .slash{
   font-family:var(--mono);font-size:11px;color:var(--muted);
@@ -851,6 +868,16 @@ body::after{
   background:rgba(255,255,255,0.14);border:1px solid rgba(255,255,255,0.18);border-radius:4px;
   color:rgba(250,250,246,0.85);
 }
+
+.sketch-modal{position:fixed;inset:0;z-index:11;display:none;align-items:center;justify-content:center;background:rgba(250,250,246,.72);backdrop-filter:blur(8px)}
+.sketch-modal.open{display:flex}
+.sketch-panel{width:min(980px,calc(100vw - 32px));background:var(--paper);border:1px solid var(--hair-2);box-shadow:var(--shadow-float);border-radius:14px;padding:14px}
+.sketch-top{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.sketch-top strong{font-family:var(--sans);font-size:13px;letter-spacing:0;text-transform:none;color:var(--ink);margin-right:auto}
+.sketch-top button,.sketch-top input{font:inherit}
+.sketch-top button{border:1px solid var(--hair);background:white;border-radius:7px;padding:7px 10px;cursor:pointer;color:var(--ink)}
+.sketch-top button.active{background:var(--ink);color:var(--paper)}
+#sketchCanvas{display:block;width:100%;height:min(62vh,620px);background:white;border:1px solid var(--hair-2);touch-action:none;cursor:crosshair}
 
 /* ─────────── modal ─────────── */
 .modal{
@@ -973,6 +1000,20 @@ body::after{
     <div id="wall" class="wall"></div>
   </main>
   <div id="modal" class="modal" aria-hidden="true"></div>
+  <div id="sketchModal" class="sketch-modal" aria-hidden="true">
+    <div class="sketch-panel">
+      <div class="sketch-top">
+        <strong>Sketch reference</strong>
+        <button type="button" id="sketchBrush" class="active">Brush</button>
+        <button type="button" id="sketchEraser">Eraser</button>
+        <label>Size <input id="sketchSize" type="range" min="2" max="48" value="8"></label>
+        <button type="button" id="sketchClear">Clear</button>
+        <button type="button" id="sketchUse">Use ref</button>
+        <button type="button" id="sketchClose">×</button>
+      </div>
+      <canvas id="sketchCanvas" width="1024" height="1024"></canvas>
+    </div>
+  </div>
   <form id="composer" class="composer" autocomplete="off">
     <div id="refs" class="refs"></div>
     <div class="promptRow">
@@ -1040,7 +1081,7 @@ const pad=n=>String(n).padStart(2,'0');
 const imgUrl=x=>'/api/image/'+encodeURIComponent(x.imageId)+'?token='+encodeURIComponent(TOKEN);
 async function api(path,opts={}){const sep=path.includes('?')?'&':'?';const r=await fetch(path+sep+'token='+encodeURIComponent(TOKEN),opts);if(!r.ok)throw new Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),1800)}
-function renderRefs(){const el=$('#refs');el.classList.toggle('hasRefs',refs.length>0);el.innerHTML=refs.map(r=>'<div class="ref-chip" title="Reference image"><img src="'+imgUrl(r)+'" alt=""><button type="button" data-ref="'+esc(r.imageId)+'" aria-label="Remove reference">×</button></div>').join('');$$('[data-ref]').forEach(b=>b.onclick=()=>{refs=refs.filter(r=>r.imageId!==b.dataset.ref);renderRefs()})}
+function renderRefs(){const el=$('#refs');el.classList.toggle('hasRefs',refs.length>0);el.innerHTML=refs.map(r=>'<div class="ref-chip" title="Reference image"><img src="'+imgUrl(r)+'" alt=""><button type="button" data-ref="'+esc(r.imageId)+'" aria-label="Remove reference">×</button></div>').join('')+'<button type="button" class="sketch-ref" id="openSketch">+ Sketch</button>';$$('[data-ref]').forEach(b=>b.onclick=()=>{refs=refs.filter(r=>r.imageId!==b.dataset.ref);renderRefs()});$('#openSketch').onclick=openSketch}
 function addRef(x){if(!x||refs.some(r=>r.imageId===x.imageId))return;refs.push(x);renderRefs();toast('Reference added')}
 function batchKey(x){return x.batchId||(x.savedPath.includes('/batches/')?x.savedPath.split('/batches/')[1]?.split('/')[0]:'')||''}
 function passes(x){if(filter==='batch'&&!batchKey(x))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;return true}
@@ -1188,6 +1229,21 @@ events.addEventListener('imagegen:generated',()=>{statusEl.textContent='Updated 
 events.addEventListener('generation:start',e=>{statusEl.textContent=JSON.parse(e.data).message;wrap.classList.add('busy');wrap.classList.remove('live')});
 events.onerror=()=>{statusEl.textContent='Disconnected';wrap.classList.remove('live');wrap.classList.remove('busy')};
 
+renderRefs();
+const sketchModal=$('#sketchModal'),sketchCanvas=$('#sketchCanvas'),sketchCtx=sketchCanvas.getContext('2d');let sketchTool='brush',drawing=false,last=null;
+function initSketch(){sketchCtx.fillStyle='white';sketchCtx.fillRect(0,0,sketchCanvas.width,sketchCanvas.height);sketchCtx.lineCap='round';sketchCtx.lineJoin='round'}
+function openSketch(){sketchModal.classList.add('open');sketchModal.setAttribute('aria-hidden','false')}
+function closeSketch(){sketchModal.classList.remove('open');sketchModal.setAttribute('aria-hidden','true')}
+function sketchPoint(e){const r=sketchCanvas.getBoundingClientRect();return {x:(e.clientX-r.left)*sketchCanvas.width/r.width,y:(e.clientY-r.top)*sketchCanvas.height/r.height}}
+function sketchLine(a,b){sketchCtx.globalCompositeOperation=sketchTool==='eraser'?'destination-out':'source-over';sketchCtx.strokeStyle='black';sketchCtx.lineWidth=Number($('#sketchSize').value)||8;sketchCtx.beginPath();sketchCtx.moveTo(a.x,a.y);sketchCtx.lineTo(b.x,b.y);sketchCtx.stroke()}
+sketchCanvas.addEventListener('pointerdown',e=>{drawing=true;last=sketchPoint(e);sketchCanvas.setPointerCapture(e.pointerId)})
+sketchCanvas.addEventListener('pointermove',e=>{if(!drawing)return;const p=sketchPoint(e);sketchLine(last,p);last=p})
+sketchCanvas.addEventListener('pointerup',()=>{drawing=false;last=null})
+$('#sketchBrush').onclick=()=>{sketchTool='brush';$('#sketchBrush').classList.add('active');$('#sketchEraser').classList.remove('active')}
+$('#sketchEraser').onclick=()=>{sketchTool='eraser';$('#sketchEraser').classList.add('active');$('#sketchBrush').classList.remove('active')}
+$('#sketchClear').onclick=initSketch;$('#sketchClose').onclick=closeSketch;
+$('#sketchUse').onclick=async()=>{const blob=await new Promise(r=>sketchCanvas.toBlob(r,'image/png'));const res=await api('/api/sketch',{method:'POST',headers:{'content-type':'image/png'},body:blob});addRef(res.metadata);closeSketch();initSketch()};
+initSketch();
 load();
 </script>
 </body>
@@ -1247,6 +1303,38 @@ export default function imagegen(pi: ExtensionAPI) {
 		if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/studio")) return writeHtml(res, renderStudioPage(studioToken));
 		if (req.method === "GET" && url.pathname === "/events") return handleStudioEvents(req, res);
 		if (req.method === "GET" && url.pathname === "/api/images") return writeJson(res, 200, { images: await readRecentMetadata(1000) });
+		if (req.method === "POST" && url.pathname === "/api/sketch") {
+			const body = await readRequestBody(req, 20 * 1024 * 1024);
+			if (!isPng(body)) return writeJson(res, 415, { ok: false, error: "Expected PNG sketch upload." });
+			const imageId = `sketch_${randomUUID()}`;
+			const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+			const savedPath = join(getAgentDir(), "generated-images", "sketches", `${stamp}-${imageId}.png`);
+			await withFileMutationQueue(savedPath, async () => {
+				await mkdir(dirname(savedPath), { recursive: true });
+				await writeFile(savedPath, body);
+			});
+			const metadataPath = metadataPathForImage(savedPath);
+			const metadata: ImagegenMetadata = {
+				createdAt: new Date().toISOString(),
+				prompt: "Sketch reference",
+				provider: "local-sketch",
+				responseModel: "none",
+				imageModel: "canvas",
+				imageId,
+				savedPath,
+				metadataPath,
+				mimeType: "image/png",
+				size: "1024x1024",
+				quality: "n/a",
+				background: "opaque",
+				outputFormat: "png",
+				thinking: "off",
+				kind: "sketch",
+			};
+			await saveMetadata(metadata);
+			broadcastStudioEvent("imagegen:generated", metadata);
+			return writeJson(res, 200, { ok: true, metadata });
+		}
 		const imageMatch = url.pathname.match(/^\/api\/image\/([^/]+)$/);
 		if (req.method === "GET" && imageMatch) {
 			const metadata = await findMetadataByImageId(decodeURIComponent(imageMatch[1]!));
