@@ -57,9 +57,9 @@ Select the ChatGPT/Codex option that provides the `openai-codex` provider.
 Examples:
 
 ```txt
-/img gen tiny blue voxel fish on white background
-/img gen --thinking off --style minecraft-screenshot Jules Verne cave outpost
-/img batch 4 --style poster a cinematic expedition poster for a lava cavern
+/img gen tiny blue ceramic fish on white background
+/img gen --thinking off --style poster a cinematic expedition poster for a lava cavern
+/img batch 4 --style wallpaper a quiet mountain observatory at sunrise
 /img studio
 ```
 
