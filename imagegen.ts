@@ -93,6 +93,8 @@ interface ImagegenMetadata {
 	background: string;
 	outputFormat: string;
 	thinking: string;
+	referenceImageIds?: string[];
+	referencePaths?: string[];
 	batchId?: string;
 	batchPrompt?: string;
 	batchIndex?: number;
@@ -429,7 +431,7 @@ async function generateImage(
 	signal: AbortSignal | undefined,
 	onUpdate: ToolUpdate | undefined,
 	ctx: ImagegenContext,
-	extraMetadata: Partial<Pick<ImagegenMetadata, "batchId" | "batchPrompt" | "batchIndex" | "batchCount">> = {},
+	extraMetadata: Partial<Pick<ImagegenMetadata, "batchId" | "batchPrompt" | "batchIndex" | "batchCount" | "referenceImageIds" | "referencePaths">> = {},
 ) {
 	const token = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER);
 	if (!token) {
@@ -766,6 +768,11 @@ body::after{
   background:linear-gradient(180deg,rgba(255,255,255,0.65),transparent 38%);
   mix-blend-mode:overlay;opacity:0.7;
 }
+.refs{display:none;gap:8px;flex-wrap:wrap;padding:0 6px 10px}
+.refs.hasRefs{display:flex}
+.ref-chip{position:relative;width:54px;height:42px;border:1px solid var(--hair-2);background:var(--paper-2);overflow:hidden}
+.ref-chip img{width:100%;height:100%;object-fit:cover;display:block}
+.ref-chip button{position:absolute;right:2px;top:2px;border:0;background:rgba(250,250,246,.9);color:var(--ink);width:18px;height:18px;border-radius:999px;cursor:pointer;font-size:12px;line-height:1}
 .promptRow{display:flex;align-items:flex-start;gap:12px;padding:4px 6px 14px}
 .slash{
   font-family:var(--mono);font-size:11px;color:var(--muted);
@@ -914,6 +921,7 @@ body::after{
   .batch-title{font-size:16px}
   .composer{width:calc(100vw - 24px);bottom:14px;padding:14px 14px 10px;border-radius:12px}
   .promptBox{font-size:18px}
+  .refs{padding:0 2px 8px}
   .promptRow{padding:2px 2px 12px;gap:8px}
   .slash{display:none}
   .controls{flex-wrap:wrap;gap:4px}
@@ -953,6 +961,7 @@ body::after{
   </main>
   <div id="modal" class="modal" aria-hidden="true"></div>
   <form id="composer" class="composer" autocomplete="off">
+    <div id="refs" class="refs"></div>
     <div class="promptRow">
       <span class="slash" aria-hidden="true">/</span>
       <textarea id="prompt" class="promptBox" placeholder="Describe what you'd like to see…" rows="1"></textarea>
@@ -1011,13 +1020,15 @@ body::after{
 </div>
 <script>
 const TOKEN=${JSON.stringify(token)};
-let images=[],selected=null,filter='all',count=4;
+let images=[],selected=null,filter='all',count=4,refs=[];
 const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pad=n=>String(n).padStart(2,'0');
 const imgUrl=x=>'/api/image/'+encodeURIComponent(x.imageId)+'?token='+encodeURIComponent(TOKEN);
 async function api(path,opts={}){const sep=path.includes('?')?'&':'?';const r=await fetch(path+sep+'token='+encodeURIComponent(TOKEN),opts);if(!r.ok)throw new Error(await r.text());return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
 function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('show');clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove('show'),1800)}
+function renderRefs(){const el=$('#refs');el.classList.toggle('hasRefs',refs.length>0);el.innerHTML=refs.map(r=>'<div class="ref-chip" title="Reference image"><img src="'+imgUrl(r)+'" alt=""><button type="button" data-ref="'+esc(r.imageId)+'" aria-label="Remove reference">×</button></div>').join('');$$('[data-ref]').forEach(b=>b.onclick=()=>{refs=refs.filter(r=>r.imageId!==b.dataset.ref);renderRefs()})}
+function addRef(x){if(!x||refs.some(r=>r.imageId===x.imageId))return;refs.push(x);renderRefs();toast('Reference added')}
 function batchKey(x){return x.batchId||(x.savedPath.includes('/batches/')?x.savedPath.split('/batches/')[1]?.split('/')[0]:'')||''}
 function passes(x){if(filter==='batch'&&!batchKey(x))return false;if(filter==='tmp'&&!x.savedPath.startsWith('/tmp/'))return false;return true}
 function visibleImages(){return images.filter(passes)}
@@ -1107,14 +1118,14 @@ function move(delta){const v=visibleImages();if(!selected||!v.length)return;cons
 function selectedPrompt(){return selected?.batchPrompt || selected?.prompt || ''}
 function setComposerPrompt(text){ta.value=text;autosize();ta.focus();closeModal()}
 async function generateFromSelected(prompt,countOverride=count){
-  await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count:countOverride})});
+  await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count:countOverride,references:refs.map(r=>r.imageId)})});
 }
 async function act(a){
   if(!selected)return;
   if(a==='copyprompt'){await navigator.clipboard.writeText(selectedPrompt());return toast('Prompt copied')}
   if(a==='vary')return setComposerPrompt(selectedPrompt()+'\\n\\nVariation: ')
   if(a==='rerun'){await generateFromSelected(selectedPrompt());return toast('Rerunning')}
-  if(a==='ref'){await api('/api/insert',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})});return toast('Reference attached')}
+  if(a==='ref'){addRef(selected);closeModal();ta.focus();return}
   if(a==='copypath'){await navigator.clipboard.writeText(selected.savedPath);return toast('Path copied')}
   await api('/api/'+(a==='attach'?'insert':a),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({imageId:selected.imageId})});
   toast(a==='attach'?'Attached':a);
@@ -1141,7 +1152,7 @@ $('#composer').onsubmit=async e=>{
   const wrap=$('#status-wrap'),statusEl=$('#status');
   wrap.classList.remove('live');wrap.classList.add('busy');statusEl.textContent='Generating';
   try{
-    await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count})});
+    await api('/api/generate',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt,style:$('#style').value,size:$('#size').value,quality:$('#quality').value,thinking:$('#thinking').value,count,references:refs.map(r=>r.imageId)})});
     toast('Generation started');
   }catch(err){toast(err.message)}
   finally{btn.disabled=false;if(lbl)lbl.textContent='Generate';wrap.classList.remove('busy')}
@@ -1248,6 +1259,14 @@ export default function imagegen(pi: ExtensionAPI) {
 			if (!THINKING_MODES.includes(thinking as (typeof THINKING_MODES)[number])) {
 				return writeJson(res, 400, { ok: false, error: `Unknown thinking mode: ${thinking}` });
 			}
+			const referenceIds = Array.isArray(body.references) ? body.references.map(String).slice(0, 8) : [];
+			const references = (await Promise.all(referenceIds.map((id) => findMetadataByImageId(id)))).filter(Boolean) as ImagegenMetadata[];
+			const referencePrompt = references.length
+				? `${prompt}\n\nReference image paths for visual style/composition: ${references.map((item) => item.savedPath).join(", ")}`
+				: prompt;
+			const referenceMetadata = references.length
+				? { referenceImageIds: references.map((item) => item.imageId), referencePaths: references.map((item) => item.savedPath) }
+				: {};
 			const options = {
 				style: style || undefined,
 				size: String(body.size ?? "auto") as ToolParams["size"],
@@ -1257,7 +1276,7 @@ export default function imagegen(pi: ExtensionAPI) {
 			const results: ImagegenDetails[] = [];
 			if (count === 1) {
 				broadcastStudioEvent("generation:start", { message: "Generating image…" });
-				const { details } = await generateImage(applyStyle(prompt, options), lastCtx.signal, undefined, lastCtx);
+				const { details } = await generateImage(applyStyle(referencePrompt, options), lastCtx.signal, undefined, lastCtx, referenceMetadata);
 				pi.events.emit("imagegen:generated", details);
 				broadcastStudioEvent("imagegen:generated", details);
 				results.push(details);
@@ -1266,7 +1285,7 @@ export default function imagegen(pi: ExtensionAPI) {
 				const batchDir = join(getAgentDir(), "generated-images", "batches", batchId);
 				for (let index = 0; index < count; index++) {
 					broadcastStudioEvent("generation:start", { message: `Generating ${index + 1}/${count}…` });
-					const params = applyStyle(`${prompt}. Variation ${index + 1} of ${count}; make this composition distinct from the others.`, {
+					const params = applyStyle(`${referencePrompt}. Variation ${index + 1} of ${count}; make this composition distinct from the others.`, {
 						...options,
 						outputPath: join(batchDir, `${String(index + 1).padStart(2, "0")}.png`),
 					});
@@ -1275,6 +1294,7 @@ export default function imagegen(pi: ExtensionAPI) {
 						batchPrompt: prompt,
 						batchIndex: index + 1,
 						batchCount: count,
+						...referenceMetadata,
 					});
 					pi.events.emit("imagegen:generated", details);
 					broadcastStudioEvent("imagegen:generated", details);
