@@ -1,7 +1,7 @@
 # pi-imagegen
 
 [![npm version](https://img.shields.io/npm/v/pi-imagegen.svg)](https://www.npmjs.com/package/pi-imagegen)
-[![npm downloads](https://img.shields.io/npm/dm/pi-imagegen.svg)](https://www.npmjs.com/package/pi-imagegen)
+[![license](https://img.shields.io/npm/l/pi-imagegen.svg)](https://github.com/Jon-Vii/pi-imagegen/blob/main/LICENSE)
 
 A [Pi](https://pi.dev) package for generating images with your existing OpenAI/Codex subscription session.
 
