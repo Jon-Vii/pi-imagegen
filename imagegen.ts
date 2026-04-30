@@ -581,7 +581,7 @@ function isPng(buffer: Buffer): boolean {
 
 function openBrowser(url: string): Promise<void> {
 	if (process.platform === "darwin") return spawnDetached("open", [url]);
-	if (process.platform === "win32") return spawnDetached("powershell.exe", ["-NoProfile", "-Command", "Start-Process $args[0]", url]);
+	if (process.platform === "win32") return spawnDetached("cmd", ["/c", "start", "", url]);
 	return spawnDetached("xdg-open", [url]);
 }
 
@@ -1003,7 +1003,7 @@ body::after{
   </header>
   <main class="canvas">
     <div class="headline">
-      <h1>Atelier<span class="amp">,</span> <em>quietly.</em></h1>
+      <h1>Pi Image Studio</h1>
       <span class="rule"></span>
       <span class="meta" id="count">00 plates</span>
     </div>
@@ -1449,8 +1449,18 @@ export default function imagegen(pi: ExtensionAPI) {
 		lastCtx = ctx;
 		const base = await ensureStudioServer();
 		const url = `${base}/studio?token=${encodeURIComponent(studioToken)}`;
-		await openBrowser(url);
-		ctx.ui.notify("Image studio opened.", "info");
+		try {
+			await openBrowser(url);
+			ctx.ui.notify("Image studio opened.", "info");
+		} catch (error) {
+			ctx.ui.notify("Could not open browser automatically. Copy the studio URL from the message.", "warning");
+			pi.sendMessage({
+				customType: "imagegen-result",
+				content: `Image studio is running, but the browser could not be opened automatically.\n\nOpen this URL manually:\n${url}\n\nError: ${error instanceof Error ? error.message : String(error)}`,
+				display: true,
+				details: { url },
+			});
+		}
 	}
 
 	pi.on("session_start", (_event, ctx) => {
