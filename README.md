@@ -1,5 +1,8 @@
 # pi-imagegen
 
+[![npm version](https://img.shields.io/npm/v/pi-imagegen.svg)](https://www.npmjs.com/package/pi-imagegen)
+[![npm downloads](https://img.shields.io/npm/dm/pi-imagegen.svg)](https://www.npmjs.com/package/pi-imagegen)
+
 A [Pi](https://pi.dev) package for generating images with your existing OpenAI/Codex subscription session.
 
 `pi-imagegen` adds an agent-callable `imagegen` tool, a `/img` command namespace, and a local browser studio for visual image workflows.
@@ -14,9 +17,13 @@ A [Pi](https://pi.dev) package for generating images with your existing OpenAI/C
 
 ## Install
 
+Install the published npm package:
+
 ```bash
-pi install https://github.com/Jon-Vii/pi-imagegen
+pi install npm:pi-imagegen
 ```
+
+npm package: <https://www.npmjs.com/package/pi-imagegen>
 
 For local development:
 
