@@ -240,10 +240,27 @@ async function resolveImageTarget(target: string, cwd: string): Promise<string |
 	return resolve(cwd, raw);
 }
 
-function macOpen(path: string, reveal = false): void {
-	const args = reveal ? ["-R", path] : [path];
-	const child = spawn("open", args, { detached: true, stdio: "ignore" });
-	child.unref();
+function spawnDetached(command: string, args: string[]): Promise<void> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
+		child.once("error", reject);
+		child.once("spawn", () => {
+			child.unref();
+			resolve();
+		});
+	});
+}
+
+async function openPath(targetPath: string): Promise<void> {
+	if (process.platform === "darwin") return spawnDetached("open", [targetPath]);
+	if (process.platform === "win32") return spawnDetached("powershell.exe", ["-NoProfile", "-Command", "Start-Process -LiteralPath $args[0]", targetPath]);
+	return spawnDetached("xdg-open", [targetPath]);
+}
+
+async function revealPath(targetPath: string): Promise<void> {
+	if (process.platform === "darwin") return spawnDetached("open", ["-R", targetPath]);
+	if (process.platform === "win32") return spawnDetached("explorer.exe", [`/select,${targetPath}`]);
+	return spawnDetached("xdg-open", [dirname(targetPath)]);
 }
 
 function parseImgArgs(input: string): { options: Partial<ToolParams> & { style?: string }; positional: string[] } {
@@ -563,16 +580,9 @@ function isPng(buffer: Buffer): boolean {
 }
 
 function openBrowser(url: string): Promise<void> {
-	const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
-	const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
-	return new Promise((resolve, reject) => {
-		const child = spawn(command, args, { detached: true, stdio: "ignore" });
-		child.once("error", reject);
-		child.once("spawn", () => {
-			child.unref();
-			resolve();
-		});
-	});
+	if (process.platform === "darwin") return spawnDetached("open", [url]);
+	if (process.platform === "win32") return spawnDetached("powershell.exe", ["-NoProfile", "-Command", "Start-Process $args[0]", url]);
+	return spawnDetached("xdg-open", [url]);
 }
 
 function renderStudioPage(token: string): string {
@@ -1413,8 +1423,8 @@ export default function imagegen(pi: ExtensionAPI) {
 			const body = await readJsonBody(req);
 			const metadata = await findMetadataByImageId(String(body.imageId ?? ""));
 			if (!metadata) return writeJson(res, 404, { ok: false, error: "Image not found" });
-			if (url.pathname === "/api/open") macOpen(metadata.savedPath);
-			if (url.pathname === "/api/reveal") macOpen(metadata.savedPath, true);
+			if (url.pathname === "/api/open") await openPath(metadata.savedPath);
+			if (url.pathname === "/api/reveal") await revealPath(metadata.savedPath);
 			if (url.pathname === "/api/insert") insertImageIntoPrompt(metadata.savedPath, lastCtx);
 			return writeJson(res, 200, { ok: true });
 		}
@@ -1655,13 +1665,13 @@ export default function imagegen(pi: ExtensionAPI) {
 				}
 
 				if (subcommand === "open") {
-					macOpen(path);
+					await openPath(path);
 					ctx.ui.notify(`Opened ${path}`, "success");
 					return;
 				}
 
 				if (subcommand === "reveal") {
-					macOpen(path, true);
+					await revealPath(path);
 					ctx.ui.notify(`Revealed ${path}`, "success");
 					return;
 				}
