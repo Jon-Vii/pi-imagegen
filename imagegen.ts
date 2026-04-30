@@ -253,13 +253,13 @@ function spawnDetached(command: string, args: string[]): Promise<void> {
 
 async function openPath(targetPath: string): Promise<void> {
 	if (process.platform === "darwin") return spawnDetached("open", [targetPath]);
-	if (process.platform === "win32") return spawnDetached("powershell.exe", ["-NoProfile", "-Command", "Start-Process -LiteralPath $args[0]", targetPath]);
+	if (process.platform === "win32") return spawnDetached("cmd", ["/c", "start", "", targetPath]);
 	return spawnDetached("xdg-open", [targetPath]);
 }
 
 async function revealPath(targetPath: string): Promise<void> {
 	if (process.platform === "darwin") return spawnDetached("open", ["-R", targetPath]);
-	if (process.platform === "win32") return spawnDetached("explorer.exe", [`/select,${targetPath}`]);
+	if (process.platform === "win32") return spawnDetached("cmd", ["/c", "start", "", "explorer.exe", `/select,\"${targetPath}\"`]);
 	return spawnDetached("xdg-open", [dirname(targetPath)]);
 }
 

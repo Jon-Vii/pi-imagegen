@@ -1,6 +1,6 @@
 {
   "name": "pi-imagegen",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Pi package for OpenAI/Codex image generation with a local browser studio.",
   "type": "module",
   "license": "MIT",
